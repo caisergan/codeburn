@@ -136,9 +136,15 @@ private struct InsightPillSwitcher: View {
 // MARK: - Trend (14-day bar chart with peak + average)
 
 private struct TrendInsight: View {
+    @Environment(AppStore.self) private var store
     let days: [DailyHistoryEntry]
     let period: Period
     @AppStorage("codeburn.trendShowsTokens") private var showTokens = false
+
+    /// Hours is for Today only, and needs the payload's call timeline.
+    private var hoursAvailable: Bool {
+        period == .today && store.selectedDay == nil && store.payload.history.timeline != nil
+    }
 
     private var trendDayCount: Int {
         switch period {
@@ -154,6 +160,20 @@ private struct TrendInsight: View {
     }
 
     var body: some View {
+        if hoursAvailable && store.trendGranularity == .hours {
+            HoursTrend(
+                timeline: store.payload.history.timeline,
+                sessions: store.selectedProvider == .claude ? store.claudeLimits?.sessions ?? [] : [],
+                showTokens: $showTokens,
+                granularity: Binding(get: { store.trendGranularity }, set: { store.trendGranularity = $0 })
+            )
+        } else {
+            daysBody
+        }
+    }
+
+    @ViewBuilder
+    private var daysBody: some View {
         let dayCount = trendDayCount
         let bars = buildTrendBars(from: days, dayCount: dayCount)
         let stats = computeTrendStats(bars: bars, allDays: days, dayCount: dayCount)
@@ -179,8 +199,17 @@ private struct TrendInsight: View {
                 }
                 Spacer()
                 VStack(alignment: .trailing, spacing: 4) {
-                    if totalTokens > 0 {
-                        TrendMetricToggle(showTokens: $showTokens)
+                    HStack(spacing: 6) {
+                        if hoursAvailable {
+                            SegmentPills(
+                                options: TrendGranularity.allCases,
+                                label: \.displayLabel,
+                                selection: Binding(get: { store.trendGranularity }, set: { store.trendGranularity = $0 })
+                            )
+                        }
+                        if totalTokens > 0 {
+                            TrendMetricToggle(showTokens: $showTokens)
+                        }
                     }
                     if let delta = stats.deltaPercent {
                         HStack(spacing: 3) {
@@ -239,6 +268,148 @@ private struct TrendInsight: View {
     }
 }
 
+/// Trend › Hours: today's spend or tokens per local hour, from the payload's
+/// call timeline. On the Claude tab each 5-hour session is shaded behind the
+/// bars and labelled with its 5-hour percent.
+private struct HoursTrend: View {
+    let timeline: GranularTimeline?
+    let sessions: [ClaudeLimitsReport.Session]
+    @Binding var showTokens: Bool
+    @Binding var granularity: TrendGranularity
+
+    private static let hourLabel: DateFormatter = {
+        let f = DateFormatter()
+        f.locale = Locale(identifier: "en_US_POSIX")
+        f.dateFormat = "HH:00"
+        return f
+    }()
+
+    var body: some View {
+        let now = Date()
+        let hours = HourlyTimeline.buckets(timeline: timeline, day: now)
+        let bars = hours.map { hour in
+            TrendBar(
+                date: Self.hourLabel.string(from: hour.start),
+                cost: hour.cost,
+                inputTokens: hour.tokens,
+                outputTokens: 0,
+                isToday: hour.start <= now && now < hour.end,
+                topModels: hour.topChats.map {
+                    DailyModelBreakdown(name: $0.label, cost: $0.cost, inputTokens: Int($0.tokens.rounded()))
+                }
+            )
+        }
+        let totalTokens = hours.reduce(0.0) { $0 + $1.tokens }
+        let totalCost = hours.reduce(0.0) { $0 + $1.cost }
+        let useTokens = trendUsesTokens(showTokens: showTokens, totalTokens: totalTokens)
+        let metric: (TrendBar) -> Double = useTokens ? { $0.tokens } : { $0.cost }
+        let maxValue = max(bars.map(metric).max() ?? 1, 0.01)
+        // Averaged over the hours so far, not the whole day.
+        let elapsedHours = max(1, hours.filter { $0.start <= now }.count)
+        let avgValue = bars.map(metric).reduce(0, +) / Double(elapsedHours)
+        let peak = bars.filter { metric($0) > 0 }.max(by: { metric($0) < metric($1) })
+        let current = bars.first(where: \.isToday).map(metric)
+
+        VStack(alignment: .leading, spacing: 10) {
+            HStack(alignment: .firstTextBaseline) {
+                VStack(alignment: .leading, spacing: 1) {
+                    Text(L("Today by hour"))
+                        .font(.system(size: 10, weight: .medium))
+                        .foregroundStyle(.tertiary)
+                    Text(useTokens ? L("%@ tokens", ClaudeSessionFormat.tokens(totalTokens)) : totalCost.asCurrency())
+                        .font(.system(size: 18, weight: .semibold, design: .rounded))
+                        .monospacedDigit()
+                        .foregroundStyle(.primary)
+                }
+                Spacer()
+                HStack(spacing: 6) {
+                    SegmentPills(options: TrendGranularity.allCases, label: \.displayLabel, selection: $granularity)
+                    if totalTokens > 0 {
+                        TrendMetricToggle(showTokens: $showTokens)
+                    }
+                }
+            }
+
+            let bands = bands(day: now)
+            VStack(alignment: .leading, spacing: 2) {
+                if !bands.isEmpty {
+                    BandLabels(bands: bands)
+                }
+                TrendChart(
+                    bars: bars,
+                    maxValue: maxValue,
+                    avgValue: avgValue,
+                    metric: metric,
+                    formatValue: { useTokens ? "\(ClaudeSessionFormat.tokens($0)) tok" : $0.asCompactCurrency() },
+                    barGap: 3,
+                    bands: bands
+                )
+            }
+            .zIndex(1)
+
+            HStack(spacing: 14) {
+                MiniStat(label: L("Avg/hour"), value: format(avgValue, useTokens: useTokens))
+                MiniStat(label: L("Peak"), value: peak.map { L("%1$@ at %2$@", format(metric($0), useTokens: useTokens), $0.date) } ?? "—")
+                MiniStat(label: L("This hour"), value: current.map { format($0, useTokens: useTokens) } ?? "—")
+            }
+        }
+    }
+
+    private func format(_ value: Double, useTokens: Bool) -> String {
+        useTokens ? "\(ClaudeSessionFormat.tokens(value)) tok" : value.asCompactCurrency()
+    }
+
+    private func bands(day: Date) -> [TrendBand] {
+        let calendar = Calendar.current
+        let start = calendar.startOfDay(for: day)
+        guard let end = calendar.date(byAdding: .day, value: 1, to: start) else { return [] }
+        let length = end.timeIntervalSince(start)
+        return sessions.compactMap { session in
+            guard session.end > start, session.start < end else { return nil }
+            let from = max(session.start, start).timeIntervalSince(start) / length
+            let to = min(session.end, end).timeIntervalSince(start) / length
+            let percent = ClaudeSessionFormat.percent(session.fiveHourPct, session.fiveHourQuality)
+            return TrendBand(
+                id: session.id,
+                startFraction: from,
+                endFraction: to,
+                label: percent,
+                accessibilityLabel: L(
+                    "Session %1$@, 5-hour used %2$@",
+                    ClaudeSessionFormat.sessionRange(start: session.start, end: session.end, inferred: session.startInferred),
+                    percent
+                )
+            )
+        }
+    }
+}
+
+/// Each band's 5-hour percent, in a strip above the chart so the bars never
+/// cover it. A band too narrow for its label goes without one; the hover card
+/// and VoiceOver still name it.
+private struct BandLabels: View {
+    let bands: [TrendBand]
+    private static let minimumWidth: CGFloat = 26
+
+    var body: some View {
+        GeometryReader { geo in
+            ForEach(bands) { band in
+                let width = geo.size.width * CGFloat(band.endFraction - band.startFraction)
+                if width >= Self.minimumWidth {
+                    Text(band.label)
+                        .font(.codeMono(size: 8.5, weight: .semibold))
+                        .foregroundStyle(.secondary)
+                        .lineLimit(1)
+                        .frame(width: width, alignment: .center)
+                        .offset(x: geo.size.width * CGFloat(band.startFraction))
+                }
+            }
+        }
+        .frame(height: 11)
+        .accessibilityHidden(true)
+    }
+}
+
 private struct TrendMetricToggle: View {
     @Binding var showTokens: Bool
 
@@ -266,6 +437,17 @@ private struct TrendMetricToggle: View {
     }
 }
 
+/// A shaded span behind the trend bars: Trend › Hours draws each Claude
+/// 5-hour session as one, labelled with its 5-hour percent.
+struct TrendBand: Identifiable {
+    let id: String
+    /// 0...1 positions across the chart.
+    let startFraction: Double
+    let endFraction: Double
+    let label: String
+    let accessibilityLabel: String
+}
+
 private struct TrendChart: View {
     let bars: [TrendBar]
     let maxValue: Double
@@ -273,6 +455,7 @@ private struct TrendChart: View {
     let metric: (TrendBar) -> Double
     let formatValue: (Double) -> String
     let barGap: CGFloat
+    var bands: [TrendBand] = []
 
     @State private var hoveredBarID: TrendBar.ID?
 
@@ -284,6 +467,22 @@ private struct TrendChart: View {
         let avgFraction = maxValue > 0 ? CGFloat(min(avgValue / maxValue, 1.0)) : 0
 
         ZStack(alignment: .bottomLeading) {
+            if !bands.isEmpty {
+                GeometryReader { geo in
+                    ForEach(bands) { band in
+                        let x = geo.size.width * CGFloat(band.startFraction)
+                        let width = max(2, geo.size.width * CGFloat(band.endFraction - band.startFraction))
+                        RoundedRectangle(cornerRadius: 3)
+                            .fill(Theme.brandAccent.opacity(0.09))
+                            .frame(width: width, height: geo.size.height)
+                        .offset(x: x)
+                        .accessibilityElement(children: .ignore)
+                        .accessibilityLabel(band.accessibilityLabel)
+                    }
+                }
+                .frame(height: trendChartHeight)
+                .allowsHitTesting(false)
+            }
             HStack(alignment: .bottom, spacing: barGap) {
                 ForEach(bars) { bar in
                     BarColumn(
@@ -491,9 +690,11 @@ private func prettyDate(_ ymd: String) -> String {
     return prettyDayFormat.string(from: date)
 }
 
-private struct MiniStat: View {
+struct MiniStat: View {
     let label: String
     let value: String
+    /// Optional third line (the Claude session tiles' "measured", "81% → 93%").
+    var detail: String? = nil
 
     var body: some View {
         VStack(alignment: .leading, spacing: 2) {
@@ -504,6 +705,16 @@ private struct MiniStat: View {
                 .font(.system(size: 11.5, weight: .semibold))
                 .monospacedDigit()
                 .foregroundStyle(.primary)
+                .lineLimit(1)
+                .minimumScaleFactor(0.8)
+            if let detail {
+                Text(detail)
+                    .font(.system(size: 9, weight: .medium))
+                    .monospacedDigit()
+                    .foregroundStyle(.secondary)
+                    .lineLimit(1)
+                    .minimumScaleFactor(0.8)
+            }
         }
         .padding(.horizontal, 8)
         .padding(.vertical, 5)
@@ -1874,6 +2085,12 @@ private struct PlanInsight: View {
         }
     }
 
+    /// Between sessions the endpoint reports the 5-hour window at 0% with no
+    /// reset time: nothing is running until the next message starts one.
+    static func isIdleFiveHour(percent: Double, resetsAt: Date?) -> Bool {
+        resetsAt == nil && percent <= 0
+    }
+
     private func refreshSubscriptionThroughAppDelegate() {
         if let delegate = NSApp.delegate as? AppDelegate {
             delegate.refreshSubscriptionNow()
@@ -1898,11 +2115,23 @@ private struct PlanInsight: View {
             }
 
             VStack(spacing: 8) {
-                if let p = usage.fiveHourPercent {
-                    UtilizationRow(label: L("5-hour window"), percent: p, resetsAt: usage.fiveHourResetsAt, projection: projections["five_hour"])
+                if let p = usage.fiveHourPercent, !Self.isIdleFiveHour(percent: p, resetsAt: usage.fiveHourResetsAt) || store.claudeLimits == nil {
+                    VStack(spacing: 3) {
+                        UtilizationRow(label: L("5-hour window"), percent: p, resetsAt: usage.fiveHourResetsAt, projection: projections["five_hour"])
+                        if let session = store.claudeLimits?.current.session {
+                            ClaudeSessionSpendLine(session: session)
+                        }
+                    }
+                } else if store.claudeLimits != nil {
+                    VStack(spacing: 3) { ClaudeNoSessionRow() }
                 }
                 if let p = usage.sevenDayPercent {
-                    UtilizationRow(label: L("7-day total"), percent: p, resetsAt: usage.sevenDayResetsAt, projection: projections["seven_day"])
+                    VStack(spacing: 3) {
+                        UtilizationRow(label: L("7-day total"), percent: p, resetsAt: usage.sevenDayResetsAt, projection: projections["seven_day"])
+                        if let week = store.claudeLimits?.current.week {
+                            ClaudeWeekSpendLine(week: week)
+                        }
+                    }
                 }
                 if let p = usage.sevenDayOpusPercent {
                     UtilizationRow(label: L("7-day Opus"), percent: p, resetsAt: usage.sevenDayOpusResetsAt, projection: projections["seven_day_opus"])
@@ -1913,6 +2142,11 @@ private struct PlanInsight: View {
                 ForEach(usage.scopedWeekly, id: \.label) { scoped in
                     UtilizationRow(label: L("7-day %@", scoped.label), percent: scoped.percent, resetsAt: scoped.resetsAt, projection: projections["scoped_\(scoped.label)"])
                 }
+            }
+
+            if let report = store.claudeLimits {
+                ClaudeSessionsPlanSection(report: report)
+                    .padding(.top, 2)
             }
 
             OptimizeSavingsBadge(payload: store.payload)

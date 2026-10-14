@@ -13,6 +13,10 @@ enum MenubarSecondRowMetric: String, CaseIterable, Identifiable, Sendable {
     case todayTokens
     /// Sessions the CLI reported as live in its liveness window.
     case activeSessions
+    /// The running Claude 5-hour session: its 5-hour use, its spend at API
+    /// prices and its share of the week. Refreshes on the Claude reading
+    /// schedule, so it stays current while Claude works, Manual included.
+    case claudeSession
 
     var id: String { rawValue }
 
@@ -23,6 +27,7 @@ enum MenubarSecondRowMetric: String, CaseIterable, Identifiable, Sendable {
         case .todayCost: L("Today's cost")
         case .todayTokens: L("Today's tokens")
         case .activeSessions: L("Active sessions")
+        case .claudeSession: L("Claude session")
         }
     }
 }
@@ -161,6 +166,8 @@ struct MenubarRowSnapshot: Equatable, Sendable {
     /// Nil when the payload carries no live-session block at all (a CLI that
     /// predates it), which is unknown rather than "nothing running".
     var activeSessionCount: Int?
+    /// Nil while Claude is not connected or the CLI predates `limits`.
+    var claudeLimits: ClaudeLimitsReport?
     var currencySymbol: String
     var currencyRate: Double
 
@@ -169,6 +176,7 @@ struct MenubarRowSnapshot: Equatable, Sendable {
         todayCost: Double? = nil,
         todayTotalTokens: Int? = nil,
         activeSessionCount: Int? = nil,
+        claudeLimits: ClaudeLimitsReport? = nil,
         currencySymbol: String = "$",
         currencyRate: Double = 1
     ) {
@@ -176,6 +184,7 @@ struct MenubarRowSnapshot: Equatable, Sendable {
         self.todayCost = todayCost
         self.todayTotalTokens = todayTotalTokens
         self.activeSessionCount = activeSessionCount
+        self.claudeLimits = claudeLimits
         self.currencySymbol = currencySymbol
         self.currencyRate = currencyRate
     }
@@ -219,6 +228,14 @@ enum MenubarRowFormatter {
             guard let count = snapshot.activeSessionCount else { return nil }
             // Live sessions are identity-derived, so the exact phrasing applies.
             row = SessionCountLabel.compact(sessions: count, basis: "identity")
+        case .claudeSession:
+            // Hides itself with no session running, like the other metrics
+            // without data.
+            row = ClaudeSessionFormat.menubarRow(
+                snapshot.claudeLimits,
+                symbol: snapshot.currencySymbol,
+                rate: snapshot.currencyRate
+            )
         }
         // Last line of defence: whatever a metric produces, the row never gets
         // to set the status item's width on its own.

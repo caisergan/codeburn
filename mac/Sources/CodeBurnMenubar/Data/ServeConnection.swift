@@ -149,7 +149,7 @@ actor ServeConnection {
     }
 
     static func isEligible(_ subcommand: [String]) -> Bool {
-        subcommand.first == "status"
+        subcommand.first == "status" || subcommand.first == "limits"
     }
 
     /// Kick the child off (idempotent). Called from app startup and again by

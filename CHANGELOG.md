@@ -2,7 +2,13 @@
 
 ## Unreleased
 
+### Added
+- **Claude sessions and weeks in the menu bar.** Claude › Plan now shows what the current 5-hour session and week cost at API prices, how much of your week a full session uses, and about how many sessions are left. It says when the week will run out before the session does. A Sessions | Weeks switch lists every 5-hour session of the last seven days and the last four weeks, each with its spend, its limit use and the chats behind it. A limit hit is timed to the minute from Claude Code's own refused request. The All tab gets a one-line summary, Trend gains an Hours view for today, and the second menu bar line can show the Claude session. While Claude is working, the menu bar reads your limits every 2 minutes (5 in Low Power Mode), Manual refresh included. Turn that off in Settings › General › Usage Refresh.
+- **`codeburn limits`** computes those numbers from the menu bar's limit readings, Claude Code's transcripts and your local calls, with `--format json` for scripts. It makes no network calls.
+
 ### Fixed
+- The menu bar no longer splits one Claude window into several stored ones when Anthropic's reset time wobbles by a second, and a snapshot file it fails to read is left alone instead of being overwritten.
+- A long `Retry-After` from Anthropic's usage endpoint now pauses the menu bar's limit readings for at most 30 minutes.
 - **Copilot agent requests in VS Code chat count every model call.** Copilot Chat 0.69 keeps only the last call of an agent request in its metadata, so CodeBurn showed a fraction of the output and cost. It now reads the request's totals (all calls, with the cache split when VS Code records it), and a request that records GitHub's credits costs exactly that bill (1 credit = $0.01) in reports and plan credits. A chat session that also ran on the agent host is counted once, from the agent host. In Copilot plan credits each chat request is rated on its own. Past Copilot days re-derive once after the update.
 - Copilot showed `claude-sonnet-4-6` as "Sonnet 4" instead of "Sonnet 4.6".
 

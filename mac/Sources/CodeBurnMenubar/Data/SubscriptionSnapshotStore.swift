@@ -14,7 +14,7 @@ struct SubscriptionSnapshot: Codable, Sendable {
 private let snapshotFilename = "subscription-snapshots.json"
 private let pruneOlderThanSeconds: TimeInterval = 30 * 24 * 3600
 
-private func snapshotsPath() -> String {
+func subscriptionSnapshotsPath() -> String {
     return (CodeBurnCacheDirectory.resolve() as NSString).appendingPathComponent(snapshotFilename)
 }
 
@@ -27,21 +27,24 @@ enum SubscriptionSnapshotStore {
     /// Append a snapshot. Auto-prunes entries older than 30 days. Idempotent: if a snapshot
     /// with the same windowKey + resetsAt already exists, only update percent if new is higher
     /// (so "final" reading near reset is preserved).
-    static func record(_ snapshot: SubscriptionSnapshot) async {
+    static func record(_ snapshot: SubscriptionSnapshot, path: String = subscriptionSnapshotsPath(), now: Date = Date()) async {
         await SnapshotLock.shared.run {
             do {
-                var all = loadAll()
-                let key = "\(snapshot.windowKey)|\(snapshot.resetsAt.timeIntervalSince1970)"
-                if let idx = all.firstIndex(where: { "\($0.windowKey)|\($0.resetsAt.timeIntervalSince1970)" == key }) {
+                // A file that exists but cannot be read or decoded right now
+                // must not be replaced by this one snapshot: leave it alone and
+                // let the next fetch try again.
+                guard var all = loadAllForUpdate(path: path) else { return }
+                let key = rowKey(snapshot)
+                if let idx = all.firstIndex(where: { rowKey($0) == key }) {
                     if snapshot.percent > all[idx].percent {
                         all[idx] = snapshot
                     }
                 } else {
                     all.append(snapshot)
                 }
-                let cutoff = Date().addingTimeInterval(-pruneOlderThanSeconds)
+                let cutoff = now.addingTimeInterval(-pruneOlderThanSeconds)
                 all = all.filter { $0.capturedAt >= cutoff }
-                try save(all)
+                try save(all, to: path)
             } catch {
                 NSLog("CodeBurn: snapshot record failed: \(error)")
             }
@@ -55,9 +58,10 @@ enum SubscriptionSnapshotStore {
     static func previousWindowFinal(windowKey: String, currentResetsAt: Date) async -> Double? {
         await SnapshotLock.shared.run {
             let all = loadAll()
-            let priors = all.filter { $0.windowKey == windowKey && $0.resetsAt < currentResetsAt }
-            guard let mostRecentPriorReset = priors.map({ $0.resetsAt }).max() else { return nil }
-            let priorWindow = priors.filter { $0.resetsAt == mostRecentPriorReset }
+            let current = normalizedResetTime(currentResetsAt)
+            let priors = all.filter { $0.windowKey == windowKey && normalizedResetTime($0.resetsAt) < current }
+            guard let mostRecentPriorReset = priors.map({ normalizedResetTime($0.resetsAt) }).max() else { return nil }
+            let priorWindow = priors.filter { normalizedResetTime($0.resetsAt) == mostRecentPriorReset }
             return priorWindow.map(\.percent).max()
         }
     }
@@ -79,26 +83,51 @@ enum SubscriptionSnapshotStore {
     /// a different account or tier.
     static func clearAll() async {
         await SnapshotLock.shared.run {
-            try? FileManager.default.removeItem(atPath: snapshotsPath())
+            try? FileManager.default.removeItem(atPath: subscriptionSnapshotsPath())
         }
     }
 
     // MARK: - Internals
 
-    private static func loadAll() -> [SubscriptionSnapshot] {
-        let path = snapshotsPath()
-        guard FileManager.default.fileExists(atPath: path) else { return [] }
-        guard let data = try? SafeFile.read(from: path) else { return [] }
-        let decoder = JSONDecoder()
-        decoder.dateDecodingStrategy = .iso8601
-        return (try? decoder.decode([SubscriptionSnapshot].self, from: data)) ?? []
+    /// One row per window cycle. The reset time jitters by up to a second
+    /// between fetches (07:59:59.6 against 08:00:00.0), and the file stores
+    /// whole seconds, so the exact value never matched a stored row: every
+    /// fetch appended. Windows start on 10-minute marks, so that is the key.
+    static func rowKey(_ snapshot: SubscriptionSnapshot) -> String {
+        "\(snapshot.windowKey)|\(Int(normalizedResetTime(snapshot.resetsAt).timeIntervalSince1970))"
     }
 
-    private static func save(_ snapshots: [SubscriptionSnapshot]) throws {
+    static func normalizedResetTime(_ date: Date) -> Date {
+        Date(timeIntervalSince1970: (date.timeIntervalSince1970 / 600).rounded() * 600)
+    }
+
+    private static func loadAll() -> [SubscriptionSnapshot] {
+        loadAllForUpdate() ?? []
+    }
+
+    /// The stored rows, `[]` when there is no file yet, and nil when the file
+    /// exists but could not be read or decoded, so a writer can tell "empty"
+    /// from "unreadable" and never overwrite history it failed to load.
+    static func loadAllForUpdate(path: String = subscriptionSnapshotsPath()) -> [SubscriptionSnapshot]? {
+        guard FileManager.default.fileExists(atPath: path) else { return [] }
+        guard let data = try? SafeFile.read(from: path) else {
+            NSLog("CodeBurn: snapshot file unreadable; leaving it untouched")
+            return nil
+        }
+        let decoder = JSONDecoder()
+        decoder.dateDecodingStrategy = .iso8601
+        guard let rows = try? decoder.decode([SubscriptionSnapshot].self, from: data) else {
+            NSLog("CodeBurn: snapshot file did not decode; leaving it untouched")
+            return nil
+        }
+        return rows
+    }
+
+    private static func save(_ snapshots: [SubscriptionSnapshot], to path: String = subscriptionSnapshotsPath()) throws {
         let encoder = JSONEncoder()
         encoder.dateEncodingStrategy = .iso8601
         let data = try encoder.encode(snapshots)
         // SafeFile.write refuses symlinked targets and does the tmp+rename atomic dance.
-        try SafeFile.write(data, to: snapshotsPath(), mode: 0o600)
+        try SafeFile.write(data, to: path, mode: 0o600)
     }
 }

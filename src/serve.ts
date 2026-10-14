@@ -265,7 +265,17 @@ const SERVE_OPTIONS: Readonly<Record<string, Readonly<Record<string, ServeOption
     '--provider': 'value', '--route': 'value', '--billing': 'value', '--format': 'value',
     '--project': 'value', '--exclude': 'value',
   },
+  limits: {
+    '--format': 'value',
+  },
 }
+
+/// Served commands whose answer depends on state outside the watched session
+/// roots, so the output memo must never replay them. `limits` reads the
+/// reading log the menubar appends to every couple of minutes and the clock
+/// (which session is running), neither of which raises a root event. Its parse
+/// is still memoized underneath, which is where the cost is.
+const NEVER_MEMOIZED: ReadonlySet<string> = new Set(['limits'])
 
 type ServeRequest = { id: string | number; args: string[] }
 
@@ -865,7 +875,8 @@ export async function runStdioServe(buildProgram: () => Command): Promise<void> 
       if (configFingerprint === null) outputMemo.clear()
 
       const memoKey = outputMemoKey(request.args)
-      const memoHit = outputMemo.get(memoKey)
+      const memoizable = !NEVER_MEMOIZED.has(request.args[0] ?? '')
+      const memoHit = memoizable ? outputMemo.get(memoKey) : undefined
       if (
         configFingerprint !== null
         && memoHit?.configFingerprint === configFingerprint
@@ -932,7 +943,7 @@ export async function runStdioServe(buildProgram: () => Command): Promise<void> 
           // remaining deferral is the cold first paint, counted right here.
           // Any future debounce must either be bypassed in serve too or
           // surface a count like `deferredFiles` for this gate.
-          if (configFingerprint !== null && deferredFiles === 0) {
+          if (configFingerprint !== null && deferredFiles === 0 && memoizable) {
             outputMemo.set(memoKey, createOutputMemoEntry(parseStartedAt, Date.now(), output, configFingerprint, generation))
           }
           if (outputMemo.size > 32) {

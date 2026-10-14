@@ -173,6 +173,21 @@ final class AppStore {
     private var lastErrorByKey: [PayloadCacheKey: String] = [:]
     var subscription: SubscriptionUsage?
     var subscriptionError: String?
+    /// Claude 5-hour sessions and weeks from `codeburn limits`. Nil until the
+    /// first answer, and while Claude is not connected.
+    var claudeLimits: ClaudeLimitsReport?
+    var claudeLimitsError: String?
+    @ObservationIgnored private var claudeLimitsTask: Task<Void, Never>?
+    @ObservationIgnored private var claudeLimitsFetchedAt: Date?
+    /// A CLI that exits non-zero on `limits` (one that predates it) is asked
+    /// again only after this, not on every Claude reading.
+    @ObservationIgnored private var claudeLimitsRetryAfter: Date?
+    /// Sessions | Weeks in Claude › Plan, remembered across launches.
+    var claudeSessionsListMode: ClaudeSessionsListMode = ClaudeSessionsListMode.saved() {
+        didSet { claudeSessionsListMode.persist() }
+    }
+    /// Days | Hours in Trend while the period is Today.
+    var trendGranularity: TrendGranularity = .days
     var subscriptionLoadState: SubscriptionLoadState = ClaudeCredentialStore.isBootstrapCompleted ? .dormant : .notBootstrapped
     var capacityEstimates: [String: CapacityEstimate] = [:]
     @ObservationIgnored var earlyQuotaResetMonitor = EarlyQuotaResetMonitor()
@@ -226,7 +241,20 @@ final class AppStore {
     /// Injectable seams keep the quota refresh state machine testable without
     /// making the production tests contact provider endpoints.
     @ObservationIgnored var claudeQuotaFetcher: @Sendable () async throws -> SubscriptionUsage? = {
-        try await ClaudeSubscriptionService.refreshIfBootstrapped()
+        // Every check lands in the reading log, failures with their reason,
+        // so `codeburn limits` can tell a gap from "nothing changed".
+        do {
+            let usage = try await ClaudeSubscriptionService.refreshIfBootstrapped()
+            if let usage { await ClaudeLimitReadingLog.shared.recordSuccess(usage) }
+            return usage
+        } catch {
+            if !(error is CancellationError) { await ClaudeLimitReadingLog.shared.recordFailure(error) }
+            throw error
+        }
+    }
+    /// `codeburn limits`, injectable for tests.
+    @ObservationIgnored var claudeLimitsFetcher: @Sendable () async throws -> ClaudeLimitsReport = {
+        try await DataClient.fetchClaudeLimits()
     }
     @ObservationIgnored var codexQuotaFetcher: @Sendable () async throws -> CodexUsage? = {
         try await CodexSubscriptionService.refreshIfBootstrapped()
@@ -1430,6 +1458,52 @@ final class AppStore {
         return true
     }
 
+    /// Refreshes `claudeLimits`, at most once per `minAge` unless forced.
+    /// Single-flight: a call while one is running waits for that one.
+    func refreshClaudeLimits(force: Bool = false, minAge: TimeInterval = 60) async {
+        guard claudeQuotaBootstrapChecker() else {
+            claudeLimits = nil
+            return
+        }
+        if let task = claudeLimitsTask {
+            await task.value
+            if !force { return }
+        }
+        if !force, let fetchedAt = claudeLimitsFetchedAt, Date().timeIntervalSince(fetchedAt) < minAge { return }
+        if let retryAfter = claudeLimitsRetryAfter, Date() < retryAfter { return }
+        let fetcher = claudeLimitsFetcher
+        let task = Task { [weak self] in
+            do {
+                let report = try await fetcher()
+                guard let self else { return }
+                self.claudeLimits = report
+                self.claudeLimitsError = nil
+                self.claudeLimitsRetryAfter = nil
+            } catch is CancellationError {
+                return
+            } catch {
+                guard let self else { return }
+                // Keep the last good answer on screen; an older CLI without
+                // `limits` simply never fills it, and is not re-spawned for
+                // every reading while Claude works.
+                self.claudeLimitsError = self.sanitizeForUI(error.localizedDescription)
+                if case DataClientError.nonZeroExit = error {
+                    self.claudeLimitsRetryAfter = Date().addingTimeInterval(10 * 60)
+                }
+            }
+        }
+        claudeLimitsTask = task
+        claudeLimitsFetchedAt = Date()
+        await task.value
+        claudeLimitsTask = nil
+    }
+
+    /// The All tab's session row: opens Claude › Plan.
+    func openClaudePlan() {
+        switchTo(provider: .claude)
+        selectedInsight = .plan
+    }
+
     /// User-initiated. Reuses Claude's source credential; only the source-owned
     /// Keychain access may ask for consent, and only on this explicit action.
     func activateClaudeFromDormant() async {
@@ -1514,6 +1588,7 @@ final class AppStore {
         subscriptionLoadState = .bootstrapping
         do {
             let usage = try await ClaudeSubscriptionService.bootstrap()
+            await ClaudeLimitReadingLog.shared.recordSuccess(usage)
             subscription = usage
             subscriptionError = nil
             subscriptionLoadState = .loaded
@@ -1621,6 +1696,7 @@ final class AppStore {
         subscription = nil
         subscriptionError = nil
         subscriptionLoadState = .notBootstrapped
+        claudeLimits = nil
         capacityEstimates = [:]
         earlyQuotaResetMonitor.forget(providerID: CapacityDockProvider.claude.rawValue)
         Task.detached { await SubscriptionSnapshotStore.clearAll() }
@@ -2320,6 +2396,7 @@ final class AppStore {
             todayCost: today?.cost,
             todayTotalTokens: today.map { $0.inputTokens + $0.outputTokens },
             activeSessionCount: menubarPayload?.liveSessions?.sessions.count,
+            claudeLimits: claudeLimits,
             currencySymbol: CurrencyState.shared.symbol,
             currencyRate: CurrencyState.shared.rate
         )
@@ -3207,6 +3284,45 @@ extension SubscriptionLoadState {
 
 enum DisplayMetric: String {
     case cost, tokens, totalTokens, credits, iconOnly
+}
+
+/// Claude › Plan list: the 5-hour sessions of the last seven days, or the
+/// last four weeks.
+enum ClaudeSessionsListMode: String, CaseIterable, Identifiable, Sendable {
+    case sessions
+    case weeks
+    var id: String { rawValue }
+
+    static let defaultsKey = "codeburn.claudeSessions.listMode"
+
+    static func saved(defaults: UserDefaults = .standard) -> ClaudeSessionsListMode {
+        defaults.string(forKey: defaultsKey).flatMap(ClaudeSessionsListMode.init(rawValue:)) ?? .sessions
+    }
+
+    func persist(defaults: UserDefaults = .standard) {
+        defaults.set(rawValue, forKey: Self.defaultsKey)
+    }
+
+    var displayLabel: String {
+        switch self {
+        case .sessions: L("Sessions")
+        case .weeks: L("Weeks")
+        }
+    }
+}
+
+/// Trend › Days | Hours. Hours is for Today only.
+enum TrendGranularity: String, CaseIterable, Identifiable, Sendable {
+    case days
+    case hours
+    var id: String { rawValue }
+
+    var displayLabel: String {
+        switch self {
+        case .days: L("Days")
+        case .hours: L("Hours")
+        }
+    }
 }
 
 enum InsightMode: String, CaseIterable, Identifiable {

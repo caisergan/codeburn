@@ -61,6 +61,14 @@ enum L10n {
         }
     }
 
+    /// The language `L(_:)` is serving, as a locale, for date words that sit
+    /// inside localized sentences ("week reset · Wed 11:00"): a Turkish-region
+    /// Mac running CodeBurn in English should not get "Çar" in an English line.
+    static var activeLocale: Locale {
+        let code = active.bundleURL.deletingPathExtension().lastPathComponent
+        return Locale(identifier: supportedLocalizations.first { $0.lowercased() == code.lowercased() } ?? "en")
+    }
+
     /// Point every later `L(_:)` at `preference`'s table.
     ///
     /// The `AppleLanguages` observer is the only caller in the app: the picker

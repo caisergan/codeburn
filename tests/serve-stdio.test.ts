@@ -197,6 +197,23 @@ describe('codeburn serve --stdio', () => {
     expect(usage.rssMb).toBeGreaterThan(0)
   }, 60_000)
 
+  // `limits` reads the reading log the menubar appends to, which is not a
+  // watched session root, so a fresh reading must never wait out the memo.
+  it('serves limits and never replays it from the output memo', async () => {
+    const log = join(process.env['HOME']!, '.cache', 'codeburn', 'claude-limit-readings.jsonl')
+    const first = await request(360, ['limits', '--format', 'json'])
+    expect(first).toMatchObject({ ok: true })
+    expect((JSON.parse(first['output'] as string) as { readingsThrough: string | null }).readingsThrough).toBeNull()
+    const at = new Date(Date.now() - 60_000).toISOString()
+    const resetsAt = new Date(Date.now() + 3 * 3600_000).toISOString()
+    await writeFile(log, JSON.stringify({ at, ok: true, plan: 'Max 5x', five_hour: { pct: 12, resetsAt } }) + '\n', 'utf8')
+    const second = await request(361, ['limits', '--format', 'json'])
+    const report = JSON.parse(second['output'] as string) as { readingsThrough: string | null; plan: string | null }
+    expect(report.readingsThrough).toBe(at)
+    expect(report.plan).toBe('Max 5x')
+    expect(await request(362, ['limits', '--format', 'json', '--period', 'today'])).toMatchObject({ ok: false, refused: true })
+  }, 60_000)
+
   it('refuses commands outside the read allowlist', async () => {
     const res = await request(4, ['currency', 'EUR'])
     expect(res['ok']).toBe(false)

@@ -101,6 +101,30 @@ struct DataClient {
         }
     }
 
+    static let claudeLimitsSubcommand = ["limits", "--format", "json"]
+
+    /// Claude 5-hour sessions and weeks (`codeburn limits`). Read-only and
+    /// network-free on the CLI side; it reads the reading log this app writes.
+    static func fetchClaudeLimits(
+        qualityOfService: QualityOfService = .utility
+    ) async throws -> ClaudeLimitsReport {
+        let result = try await runCLI(subcommand: claudeLimitsSubcommand, qualityOfService: qualityOfService)
+        guard result.exitCode == 0 else {
+            throw DataClientError.nonZeroExit(code: result.exitCode, stderr: result.stderr)
+        }
+        do {
+            return try ClaudeLimitsReport.decode(result.stdout)
+        } catch {
+            let snippet = String(decoding: result.stdout.prefix(2048), as: UTF8.self)
+            throw DataClientError.decode(CLIDecodeFailure(
+                underlying: error,
+                stdoutByteCount: result.stdout.count,
+                stdoutSnippet: snippet,
+                stderr: result.stderr
+            ))
+        }
+    }
+
     static func statusSubcommand(period: Period,
                                  day: String? = nil,
                                  days: Set<String> = [],

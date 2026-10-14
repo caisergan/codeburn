@@ -3355,6 +3355,22 @@ program
     process.exit(0)
   })
 
+program
+  .command('limits')
+  .description('Claude 5-hour sessions and weeks: spend at API prices against limit use (reads the menubar\'s limit readings; makes no network calls)')
+  .option('--format <format>', 'Output format: table, json', 'table')
+  .action(async (opts) => {
+    assertFormat(opts.format, ['table', 'json'], 'limits')
+    const { buildLimitsReport, renderLimitsTable } = await import('./claude-limits-report.js')
+    await loadPricing()
+    const report = await buildLimitsReport()
+    if (opts.format === 'json') {
+      process.stdout.write(JSON.stringify(report, null, 2) + '\n')
+      return
+    }
+    process.stdout.write(await renderLimitsTable(report) + '\n')
+  })
+
 registerActCommands(program)
 registerGuardCommands(program)
 registerSyncCommands(program)

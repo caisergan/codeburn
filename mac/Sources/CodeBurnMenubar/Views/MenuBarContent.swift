@@ -32,6 +32,12 @@ struct MenuBarContent: View {
                            let sync = store.payload.cursorSync?.line() {
                             CursorSyncLine(text: sync.text, warn: sync.warn)
                         }
+                        // All tab only, and only while Claude is connected (the
+                        // report is nil otherwise): opens Claude › Plan.
+                        if store.selectedProvider == .all, let report = store.claudeLimits {
+                            Divider().opacity(0.5)
+                            ClaudeSessionAllTabRow(report: report)
+                        }
                         Divider().opacity(0.5)
                         PeriodSegmentedControl()
                         ScopeSegmentedControl()
