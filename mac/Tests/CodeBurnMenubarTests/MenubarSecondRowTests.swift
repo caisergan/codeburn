@@ -12,6 +12,7 @@ struct MenubarSecondRowTests {
         todayCost: Double? = nil,
         todayTotalTokens: Int? = nil,
         activeSessionCount: Int? = nil,
+        claudeLimits: ClaudeLimitsReport? = nil,
         currencySymbol: String = "$",
         currencyRate: Double = 1
     ) -> MenubarRowSnapshot {
@@ -20,6 +21,7 @@ struct MenubarSecondRowTests {
             todayCost: todayCost,
             todayTotalTokens: todayTotalTokens,
             activeSessionCount: activeSessionCount,
+            claudeLimits: claudeLimits,
             currencySymbol: currencySymbol,
             currencyRate: currencyRate
         )
@@ -381,7 +383,7 @@ struct MenubarSecondRowTests {
     }
 
     @Test("no metric can produce a row past the budget")
-    func everyMetricRespectsTheBudget() {
+    func everyMetricRespectsTheBudget() throws {
         let wide = snapshot(
             quota: MenubarQuotaCandidate(
                 label: "Some Very Long Provider Name",
@@ -391,6 +393,7 @@ struct MenubarSecondRowTests {
             todayCost: 123_456.78,
             todayTotalTokens: 987_654_321,
             activeSessionCount: 4096,
+            claudeLimits: try ClaudeLimitsFixture.report(),
             currencySymbol: "CHF",
             currencyRate: 1
         )
@@ -492,7 +495,7 @@ struct MenubarSecondRowTests {
 
     @Test("every metric is reachable from the settings picker with a label")
     func metricsAreSelectable() {
-        #expect(MenubarSecondRowMetric.allCases == [.quotaRemaining, .todayCost, .todayTokens, .activeSessions])
+        #expect(MenubarSecondRowMetric.allCases == [.quotaRemaining, .todayCost, .todayTokens, .activeSessions, .claudeSession])
         for metric in MenubarSecondRowMetric.allCases {
             #expect(!metric.settingsLabel.isEmpty)
             #expect(MenubarSecondRowMetric(rawValue: metric.rawValue) == metric)

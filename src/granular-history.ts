@@ -15,6 +15,9 @@ const MAX_SESSION_TITLE_LENGTH = 80
 export type GranularSeries = {
   id: string
   label: string
+  /// Session series only: the chat's own id, so a client can name the chats
+  /// behind an hour and match them to other payloads.
+  sessionId?: string
 }
 
 export type GranularValue = {
@@ -279,7 +282,8 @@ function projectSeries(
   for (const rawKey of selected) {
     const id = `${prefix}_${index++}`
     publicIds.set(rawKey, id)
-    series.push({ id, label: labels.get(rawKey) ?? rawKey })
+    const sessionId = kind === 'sessions' ? rawKey.split('\0')[2] : undefined
+    series.push({ id, label: labels.get(rawKey) ?? rawKey, ...(sessionId ? { sessionId } : {}) })
   }
 
   let hasOther = false

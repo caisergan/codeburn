@@ -392,6 +392,9 @@ private struct GeneralSettingsTab: View {
     @AppStorage(QuotaCrossingPreference.defaultsKey)
     private var notifyAboutQuotaCrossings: Bool = true
 
+    @AppStorage(ClaudeLiveReadingPreference.defaultsKey)
+    private var claudeLiveWhileActive: Bool = true
+
     private let costPresets: Set<Double> = [25, 50, 100, 200, 500]
     private let tokenPresets: Set<Double> = [1_000_000, 5_000_000, 10_000_000, 25_000_000, 50_000_000, 100_000_000]
 
@@ -522,6 +525,10 @@ private struct GeneralSettingsTab: View {
                 }
                 .pickerStyle(.menu)
                 Text(L("How often the menubar figure re-reads your local session data. Auto refreshes every 30 seconds while you're plugged in and backs off on battery; Manual only refreshes when you open the popover or click Refresh Now."))
+                    .font(.system(size: 11))
+                    .foregroundStyle(.secondary)
+                Toggle(L("Keep Claude session numbers live while Claude is working"), isOn: $claudeLiveWhileActive)
+                Text(L("Checks your Claude limits every 2 minutes while Claude is working and for 10 minutes after. Nothing runs while idle."))
                     .font(.system(size: 11))
                     .foregroundStyle(.secondary)
             }

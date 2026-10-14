@@ -172,8 +172,14 @@ enum ClaudeSubscriptionService {
 
     // MARK: - 429 backoff
 
-    private static func usageBlockedUntil() -> Date? {
-        UserDefaults.standard.object(forKey: usageBlockedUntilKey) as? Date
+    /// Longest the persisted 429 block may keep CodeBurn from reading limits.
+    /// Without a cap, a block recorded by a long Retry-After (or carried over
+    /// from an older build) left the menubar dark for hours.
+    static let maxUsageBlockSeconds: TimeInterval = 30 * 60
+
+    private static func usageBlockedUntil(now: Date = Date()) -> Date? {
+        guard let until = UserDefaults.standard.object(forKey: usageBlockedUntilKey) as? Date else { return nil }
+        return min(until, now.addingTimeInterval(maxUsageBlockSeconds))
     }
 
     private static func clearUsageBlock() {
@@ -199,7 +205,7 @@ enum ClaudeSubscriptionService {
     ) -> Date {
         let seconds = max(retryAfterSeconds ?? 300, 60)
         let newUntil = now.addingTimeInterval(TimeInterval(seconds))
-        return max(existingUntil ?? .distantPast, newUntil)
+        return min(max(existingUntil ?? .distantPast, newUntil), now.addingTimeInterval(maxUsageBlockSeconds))
     }
 
     /// Returns the effective Retry-After delay. HTTP headers take precedence

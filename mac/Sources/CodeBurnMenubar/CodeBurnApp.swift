@@ -149,6 +149,13 @@ final class AppDelegate: NSObject, NSApplicationDelegate, NSPopoverDelegate, NSM
         // Start the resident CLI early without an artificial query. The first
         // real status refresh becomes its only cold warm-up. See ServeConnection.
         Task { await ServeConnection.shared.ensureStarted() }
+        // Claude session numbers: watch for transcript writes, carry the old
+        // snapshot history into the reading log once, then load the report.
+        ClaudeActivityMonitor.shared.start()
+        Task { [store] in
+            await ClaudeLimitReadingLog.shared.importSnapshotsIfNeeded()
+            await store.refreshClaudeLimits(force: true)
+        }
         // #868 experiment: restore only the activation half of the #147 fix.
         // Packaged builds ship LSUIElement=true, so the policy is .accessory
         // before main() runs and never transitions (the transition is what
@@ -423,6 +430,9 @@ final class AppDelegate: NSObject, NSApplicationDelegate, NSPopoverDelegate, NSM
     private func recordSuccessfulUsageDataSnapshot() {
         lastSuccessfulUsageDataSnapshot = UsageDataChangeGuard.snapshot()
         lastSuccessfulUsageDataSnapshotAt = Date()
+        // New local calls move the Claude session spend too. Throttled inside,
+        // so a burst of payload refreshes costs one limits query a minute.
+        Task { [store] in await store.refreshClaudeLimits() }
     }
 
     private func shouldSkipBackgroundUsageRefresh() -> Bool {
@@ -754,6 +764,10 @@ final class AppDelegate: NSObject, NSApplicationDelegate, NSPopoverDelegate, NSM
         case (false, false):
             break
         }
+        if shouldRefreshClaude {
+            // A new reading (or a logged failure) changes the session numbers.
+            await store.refreshClaudeLimits(force: true)
+        }
         await store.quotaCrossingMonitor.record(windows: store.quotaWindows)
         return true
     }
@@ -920,8 +934,33 @@ final class AppDelegate: NSObject, NSApplicationDelegate, NSPopoverDelegate, NSM
         napBackstop = scheduler
     }
 
+    /// Background Claude limit readings while Claude is working: every 2
+    /// minutes (5 in Low Power Mode) while a transcript was written in the last
+    /// 10 minutes, whatever the usage refresh cadence, Manual included. Runs
+    /// ahead of the display-sleep gate on purpose: an agent left working with
+    /// the display off is exactly the stretch whose readings would be missing.
+    private func runClaudeLiveReadingIfDue(now: Date = Date()) {
+        ClaudeActivityMonitor.shared.start()
+        guard QuotaRefreshDecision.claudeLiveReadingDue(
+            enabled: ClaudeLiveReadingPreference.isEnabled(),
+            connected: store.claudeQuotaBootstrapChecker(),
+            lastClaudeWriteAt: ClaudeActivityMonitor.shared.lastWriteAt,
+            lastAttemptAt: lastSubscriptionRefreshAt,
+            backoffUntil: nextClaudeQuotaRefreshAt,
+            lowPowerMode: ProcessInfo.processInfo.isLowPowerModeEnabled,
+            now: now
+        ) else { return }
+        // Anchor now so the next 30s tick does not start a second reading
+        // while this one is still in flight.
+        lastSubscriptionRefreshAt = now
+        Task { [weak self] in
+            _ = await self?.refreshLiveQuotaProgressIfDue(forceClaude: true)
+        }
+    }
+
     private func runRefreshLoopTick(reason: String, forcePayload: Bool = false, forceQuota: Bool = false) {
         refreshLoopHeartbeatAt = Date()
+        runClaudeLiveReadingIfDue()
         // Display sleep without system sleep (clamshell displays off, screen
         // saver energy settings) otherwise keeps the full spawn cadence running
         // for hours (#647). Asked live rather than latched from
@@ -1122,6 +1161,8 @@ final class AppDelegate: NSObject, NSApplicationDelegate, NSPopoverDelegate, NSM
             // every connected provider's usage update, not just every 30s.
             _ = self.store.subscription
             _ = self.store.subscriptionLoadState
+            // The "Claude session" second row reads the limits report.
+            _ = self.store.claudeLimits
             _ = self.store.codexUsage
             _ = self.store.codexLoadState
             _ = self.store.kimiUsage
@@ -1737,6 +1778,7 @@ final class AppDelegate: NSObject, NSApplicationDelegate, NSPopoverDelegate, NSM
             }
             refreshPayloadForPopoverOpen()
             refreshLiveQuotaProgressForPopoverOpen()
+            Task { [store] in await store.refreshClaudeLimits(minAge: 30) }
         }
     }
 

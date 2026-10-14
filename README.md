@@ -119,12 +119,15 @@ Files are backed up before they are changed, and you see the change before anyth
 ```bash
 codeburn plan set claude-max   # the plan you pay for
 codeburn quota                 # how much of it is left
+codeburn limits                # Claude 5-hour sessions and weeks at API prices
 codeburn guard install         # spending caps for Claude Code
 ```
 
 Tell CodeBurn which subscription you pay for and it stops showing only what you spent. It shows how much of the plan you have used, and whether the month is on pace to run past it.
 
 `codeburn quota` reads the live limits out of the tools you are already signed in to. That is where the five-hour and weekly windows come from. Check it before a long run.
+
+`codeburn limits` puts dollars on Claude's windows: what each 5-hour session and each week cost at API prices, and how much of your week a full session uses. The menu bar shows the same thing in Claude › Plan.
 
 Guard is opt-in and local. `codeburn guard install` adds Claude Code hooks that warn a session once it passes $5 and stop it at $15. Both numbers are yours to change, `codeburn guard status` shows where the hooks live, and `codeburn guard uninstall` takes them out again.
 
@@ -356,6 +359,8 @@ The dollar figure is what your tokens would have cost at API rates. It is not an
 <summary><strong>I keep hitting my 5-hour or weekly limit. Can I see it coming?</strong></summary>
 
 `codeburn quota` asks each provider how much of your plan is left, signing the request with the credential that tool already stores on your machine. For Claude that is a 5-hour row and a weekly row, each with a percentage used and a reset time, shown as `42% used · resets in 3h 20m` on the Plans page's Live quota panel. The Capacity Dock carries the same reading, and the macOS menu bar can carry a second line with quota remaining and its countdown. CodeBurn does not predict the hour you will run out. What you get is how full the window is and when it clears.
+
+For Claude, Claude › Plan in the menu bar (and `codeburn limits`) also tells you what a full 5-hour session costs you of the week, about how many sessions are left, and whether the week will run out before the current session does. When a limit did run out, it shows the minute, read from the refused request in Claude Code's transcript.
 
 </details>
 

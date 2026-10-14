@@ -142,6 +142,8 @@ describe('granular history', () => {
       'sessio…2222 (claude) · Refactor billing module',
     ])
     expect(new Set(history.sessionSeries.map(series => series.label)).size).toBe(2)
+    expect(history.sessionSeries.map(series => series.sessionId)).toEqual(['session-111111', 'session-222222'])
+    expect(history.modelSeries.every(series => series.sessionId === undefined)).toBe(true)
   })
 
   it('keeps the disambiguator inside the visible legend prefix for long shared title prefixes', () => {

@@ -30,4 +30,39 @@ enum QuotaRefreshDecision {
     static func windowRolledOver(resetDates: [Date], lastCheckedAt: Date, now: Date) -> Bool {
         resetDates.contains { $0 > lastCheckedAt && $0 <= now }
     }
+
+    /// Claude counts as working for this long after its last transcript write.
+    /// The same span is the tail that captures the final values after the
+    /// last call.
+    static let claudeActiveWindowSeconds: TimeInterval = 10 * 60
+
+    /// How often limits are read while Claude is working.
+    static func claudeLiveReadingInterval(lowPowerMode: Bool) -> TimeInterval {
+        lowPowerMode ? 5 * 60 : 2 * 60
+    }
+
+    /// The refresh loop ticks every 30 seconds with a little leeway, so an
+    /// interval measured to the second would slip a whole tick every time.
+    static let claudeLiveReadingSlackSeconds: TimeInterval = 5
+
+    /// True when a background Claude limit reading is owed: the setting is on,
+    /// Claude is connected, a transcript was written within the active window,
+    /// no failure back-off is pending, and the last attempt is an interval old.
+    /// Independent of the usage refresh cadence, Manual included; while idle it
+    /// is always false and the existing cadence applies unchanged.
+    static func claudeLiveReadingDue(
+        enabled: Bool,
+        connected: Bool,
+        lastClaudeWriteAt: Date?,
+        lastAttemptAt: Date?,
+        backoffUntil: Date?,
+        lowPowerMode: Bool,
+        now: Date
+    ) -> Bool {
+        guard enabled, connected, let lastClaudeWriteAt else { return false }
+        guard now.timeIntervalSince(lastClaudeWriteAt) <= claudeActiveWindowSeconds else { return false }
+        if let backoffUntil, now < backoffUntil { return false }
+        let interval = claudeLiveReadingInterval(lowPowerMode: lowPowerMode)
+        return now.timeIntervalSince(lastAttemptAt ?? .distantPast) >= interval - claudeLiveReadingSlackSeconds
+    }
 }

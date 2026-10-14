@@ -217,6 +217,38 @@ struct CombinedUsageTotals: Codable, Sendable {
 
 struct HistoryBlock: Codable, Sendable {
     let daily: [DailyHistoryEntry]
+    /// The selected period's call timeline (15-minute buckets for Today).
+    /// Optional: older CLIs and `--no-timeline` payloads omit it.
+    var timeline: GranularTimeline? = nil
+}
+
+/// `history.timeline` from `status --format menubar-json`.
+struct GranularTimeline: Codable, Sendable, Equatable {
+    struct Series: Codable, Sendable, Equatable {
+        let id: String
+        let label: String
+        /// Session series only, from CLIs that send it.
+        let sessionId: String?
+    }
+
+    struct Value: Codable, Sendable, Equatable {
+        let seriesId: String
+        let cost: Double
+        let tokens: Double
+    }
+
+    struct Point: Codable, Sendable, Equatable {
+        let timestamp: String
+        let cost: Double
+        let tokens: Double
+        let models: [Value]
+        let sessions: [Value]
+    }
+
+    let bucketMinutes: Int
+    let modelSeries: [Series]
+    let sessionSeries: [Series]
+    let points: [Point]
 }
 
 struct DailyModelBreakdown: Codable, Sendable {
@@ -231,6 +263,14 @@ struct DailyModelBreakdown: Codable, Sendable {
 
     enum CodingKeys: String, CodingKey {
         case name, cost, savingsUSD, calls, inputTokens, outputTokens
+    }
+    init(name: String, cost: Double, savingsUSD: Double = 0, calls: Int = 0, inputTokens: Int, outputTokens: Int = 0) {
+        self.name = name
+        self.cost = cost
+        self.savingsUSD = savingsUSD
+        self.calls = calls
+        self.inputTokens = inputTokens
+        self.outputTokens = outputTokens
     }
     init(from decoder: Decoder) throws {
         let c = try decoder.container(keyedBy: CodingKeys.self)
