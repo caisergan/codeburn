@@ -2309,12 +2309,6 @@ private struct CodexPlanInsight: View {
             compact: TimeInterval(windowSeconds) <= QuotaPace.etaSuppressionMaxSeconds
         )
     }
-
-    private func relativeReset(_ date: Date) -> String {
-        let f = RelativeDateTimeFormatter()
-        f.unitsStyle = .short
-        return f.localizedString(for: date, relativeTo: Date())
-    }
 }
 
 /// Plan tab for Kimi Code. Reads the CLI credential file (no keychain, no
@@ -2414,12 +2408,6 @@ private struct KimiPlanInsight: View {
         .padding(.bottom, 8)
     }
 
-    private func relativeReset(_ date: Date) -> String {
-        let f = RelativeDateTimeFormatter()
-        f.unitsStyle = .short
-        return f.localizedString(for: date, relativeTo: Date())
-    }
-
     private func shortTime(_ date: Date) -> String {
         let f = DateFormatter()
         f.timeStyle = .short
@@ -2504,12 +2492,6 @@ private struct GeminiPlanInsight: View {
         .padding(.horizontal, 14)
         .padding(.top, 4)
         .padding(.bottom, 8)
-    }
-
-    private func relativeReset(_ date: Date) -> String {
-        let f = RelativeDateTimeFormatter()
-        f.unitsStyle = .short
-        return f.localizedString(for: date, relativeTo: Date())
     }
 
     private func shortTime(_ date: Date) -> String {
@@ -2689,12 +2671,6 @@ private struct AntigravityPlanInsight: View {
         .padding(.bottom, 8)
     }
 
-    private func relativeReset(_ date: Date) -> String {
-        let f = RelativeDateTimeFormatter()
-        f.unitsStyle = .short
-        return f.localizedString(for: date, relativeTo: Date())
-    }
-
     private func shortTime(_ date: Date) -> String {
         let f = DateFormatter()
         f.timeStyle = .short
@@ -2834,14 +2810,5 @@ private struct UtilizationBar: View {
 }
 
 private func relativeReset(_ date: Date) -> String {
-    let interval = date.timeIntervalSinceNow
-    if interval <= 0 { return L("now") }
-    let hours = interval / 3600
-    if hours < 1 {
-        let minutes = Int(ceil(interval / 60))
-        return L("in %lldm", minutes)
-    }
-    if hours < 24 { return L("in %lldh", Int(ceil(hours))) }
-    let days = Int(ceil(hours / 24))
-    return L("in %lldd", days)
+    QuotaPacePresentation.relativeResetLabel(from: Date(), to: date)
 }

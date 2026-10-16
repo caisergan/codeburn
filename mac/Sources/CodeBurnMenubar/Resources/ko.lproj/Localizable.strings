@@ -430,6 +430,7 @@
 "in %lldm" = "%lld분 후";
 "in %lldh" = "%lld시간 후";
 "in %lldd" = "%lld일 후";
+"in %@" = "%@ 후";
 
 /* MARK: Capacity Dock */
 "Dock to Edge" = "화면 가장자리에 고정";
