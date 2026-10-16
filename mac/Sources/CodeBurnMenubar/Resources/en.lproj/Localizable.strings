@@ -437,6 +437,7 @@
 "in %lldm" = "in %lldm";
 "in %lldh" = "in %lldh";
 "in %lldd" = "in %lldd";
+"in %@" = "in %@";
 
 /* MARK: Capacity Dock */
 "Dock to Edge" = "Dock to Edge";

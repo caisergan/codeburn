@@ -107,4 +107,21 @@ final class QuotaPaceTests: XCTestCase {
         XCTAssertEqual(r?.willOverflow, false)
         XCTAssertNil(r?.hitsLimitAt)
     }
+
+    /// The Plan tab's "Resets …" header used to ceil to a single unit, so a
+    /// 4h 35m countdown read "in 5h" while the menu bar said "4h 35m".
+    func testRelativeResetLabelMatchesMenuBarCountdown() {
+        let fourHours35 = now.addingTimeInterval(4 * 3600 + 35 * 60 + 40)
+        XCTAssertEqual(QuotaPacePresentation.relativeResetLabel(from: now, to: fourHours35), "in 4h 35m")
+        XCTAssertEqual(
+            QuotaPacePresentation.relativeResetLabel(from: now, to: fourHours35),
+            "in " + (MenubarRowFormatter.resetCountdown(fourHours35, now: now) ?? "")
+        )
+        let fourDays18 = now.addingTimeInterval(4 * 86400 + 18 * 3600 + 59 * 60)
+        XCTAssertEqual(QuotaPacePresentation.relativeResetLabel(from: now, to: fourDays18), "in 4d 18h")
+        XCTAssertEqual(QuotaPacePresentation.relativeResetLabel(from: now, to: now.addingTimeInterval(45 * 60)), "in 45m")
+        XCTAssertEqual(QuotaPacePresentation.relativeResetLabel(from: now, to: now.addingTimeInterval(20)), "in <1m")
+        XCTAssertEqual(QuotaPacePresentation.relativeResetLabel(from: now, to: now), "now")
+        XCTAssertEqual(QuotaPacePresentation.relativeResetLabel(from: now, to: now.addingTimeInterval(-600)), "now")
+    }
 }
