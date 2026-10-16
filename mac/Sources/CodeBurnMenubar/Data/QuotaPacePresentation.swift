@@ -27,4 +27,13 @@ enum QuotaPacePresentation {
         if hours > 0 { return L("%1$lldh %2$lldm", hours, minutes % 60) }
         return L("%lldm", minutes)
     }
+
+    /// "in 4h 35m" / "in 4d 18h" / "now": the countdown above as a phrase, for
+    /// the Plan tab's "Resets %@" and "hits 100%% %@" copy. Same floor-rounded
+    /// two-unit shape as the menu bar, so the two never disagree about a reset.
+    static func relativeResetLabel(from now: Date, to date: Date) -> String {
+        let seconds = date.timeIntervalSince(now)
+        guard seconds > 0 else { return L("now") }
+        return L("in %@", countdownLabel(seconds: seconds))
+    }
 }

@@ -431,6 +431,7 @@
 "in %lldm" = "%lld 分钟后";
 "in %lldh" = "%lld 小时后";
 "in %lldd" = "%lld 天后";
+"in %@" = "%@后";
 
 /* MARK: Capacity Dock */
 "Dock to Edge" = "停靠到边缘";

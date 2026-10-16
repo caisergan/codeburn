@@ -430,6 +430,7 @@
 "in %lldm" = "dans %lldmin";
 "in %lldh" = "dans %lldh";
 "in %lldd" = "dans %lldj";
+"in %@" = "dans %@";
 
 /* MARK: Capacity Dock */
 "Dock to Edge" = "Ancrer au bord";

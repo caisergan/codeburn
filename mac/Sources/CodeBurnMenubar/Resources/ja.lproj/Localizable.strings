@@ -430,6 +430,7 @@
 "in %lldm" = "%lld分後";
 "in %lldh" = "%lld時間後";
 "in %lldd" = "%lld日後";
+"in %@" = "%@後";
 
 /* MARK: Capacity Dock */
 "Dock to Edge" = "画面端にドッキング";
