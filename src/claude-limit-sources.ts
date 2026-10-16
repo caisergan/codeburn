@@ -10,7 +10,7 @@ import { join, resolve } from 'path'
 
 import { getCodeburnCacheDir } from './cache-dir.js'
 import type { FailedCheck, LimitCall, LimitEvent, LimitName, LimitReading } from './claude-limits.js'
-import { findUnpricedModels } from './models.js'
+import { findUnpricedModels, getShortModelName } from './models.js'
 import type { ProjectSummary } from './types.js'
 
 export const READING_LOG_FILE = 'claude-limit-readings.jsonl'
@@ -343,6 +343,7 @@ function flattenLimitCalls(projects: ProjectSummary[], defaultClaudeDir?: string
               cacheWrite: call.usage.cacheCreationInputTokens,
             },
             model: call.model,
+            modelName: getShortModelName(call.model),
             unpriced: isUnpriced(call.model, call.costUSD),
             chatId,
             chatTitle,

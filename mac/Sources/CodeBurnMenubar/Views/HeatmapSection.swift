@@ -2145,7 +2145,7 @@ private struct PlanInsight: View {
             }
 
             if let report = store.claudeLimits {
-                ClaudeSessionsPlanSection(report: report)
+                ClaudeSessionsPlanSection(report: report, weekPace: projections["seven_day"].flatMap { $0.source == .linear ? $0.percent : nil })
                     .padding(.top, 2)
             }
 

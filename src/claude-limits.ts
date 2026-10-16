@@ -9,7 +9,8 @@
 export const MINUTE_MS = 60 * 1000
 export const HOUR_MS = 60 * MINUTE_MS
 export const FIVE_HOURS_MS = 5 * HOUR_MS
-export const WEEK_MS = 7 * 24 * HOUR_MS
+export const DAY_MS = 24 * HOUR_MS
+export const WEEK_MS = 7 * DAY_MS
 const TEN_MINUTES_MS = 10 * MINUTE_MS
 
 /// How long the Sessions list looks back.
@@ -55,6 +56,8 @@ export type LimitCall = {
   costUSD: number
   tokens: TokenCounts
   model: string
+  /// Display name ("Opus 5"); the raw id when the caller has none.
+  modelName?: string
   unpriced: boolean
   chatId: string
   chatTitle: string
@@ -71,6 +74,27 @@ export type LimitsInput = {
 export type Gap = { from: string; to: string; reason: string }
 
 export type ChatShare = { sessionId: string; title: string; spentUSD: number }
+
+export type ModelShare = { model: string; spentUSD: number; tokens: number }
+
+/// One hour of a session, from its start. `fiveHourPct` is the highest
+/// reading taken by the end of the hour, null when no reading fell inside it.
+export type HourOut = { start: string; end: string; spentUSD: number; tokens: number; fiveHourPct: number | null }
+
+/// One 24-hour slice of a week, from the week's reset. `usedPct` follows the
+/// same rule as an hour's `fiveHourPct`.
+export type DayOut = { start: string; end: string; spentUSD: number; tokens: number; usedPct: number | null }
+
+/// A session as one block of a week: its share of that week.
+export type WeekSession = {
+  id: string
+  start: string
+  end: string
+  running: boolean
+  spentUSD: number
+  weekPct: number | null
+  weekQuality: Quality
+}
 
 export type SessionOut = {
   id: string
@@ -93,6 +117,8 @@ export type SessionOut = {
   outsideThisMac: boolean
   unpricedModels: string[]
   chats: ChatShare[]
+  models: ModelShare[]
+  hours: HourOut[]
   gap?: Gap
 }
 
@@ -112,6 +138,12 @@ export type WeekOut = {
   fullWeekQuality: Quality
   ranOutAt?: string
   unpricedModels: string[]
+  models: ModelShare[]
+  days: DayOut[]
+  /// The week's sessions, oldest first.
+  sessions: WeekSession[]
+  /// The running week only: the previous week at the same time into it.
+  previousAtSamePoint?: { at: string; spentUSD: number; usedPct: number | null; usedQuality: Quality }
 }
 
 export type LimitsOutput = {
@@ -122,6 +154,8 @@ export type LimitsOutput = {
   rate: { weekPerSessionPoint: number | null; basis: number; restartedAt: string | null }
   sessionsLeft: number | null
   runsOutFirstAtSessionPct: number | null
+  /// The mean full-week value of the listed past weeks that have one.
+  fullWeekAverage: { usd: number | null; basis: number }
   sessions: SessionOut[]
   weeks: WeekOut[]
   gaps: Gap[]
@@ -338,6 +372,57 @@ function chatsIn(calls: LimitCall[], from: number, to: number): ChatShare[] {
   return [...byChat.values()].sort((a, b) => b.spentUSD - a.spentUSD || a.sessionId.localeCompare(b.sessionId))
 }
 
+function modelsIn(calls: LimitCall[], from: number, to: number): ModelShare[] {
+  const byModel = new Map<string, ModelShare>()
+  for (let i = lowerBound(calls, from); i < calls.length; i++) {
+    const call = calls[i]!
+    if (call.at >= to) break
+    const name = call.modelName ?? call.model
+    const row = byModel.get(name) ?? { model: name, spentUSD: 0, tokens: 0 }
+    row.spentUSD += call.costUSD
+    row.tokens += totalTokens(call.tokens)
+    byModel.set(name, row)
+  }
+  return [...byModel.values()].sort((a, b) => b.spentUSD - a.spentUSD || b.tokens - a.tokens || a.model.localeCompare(b.model))
+}
+
+function totalTokens(t: TokenCounts): number {
+  return t.input + t.output + t.cacheRead + t.cacheWrite
+}
+
+type Slice = { start: number; end: number; spentUSD: number; tokens: number; pct: number | null }
+
+/// `from`..`to` cut into `size` slices, up to `now`, each with its spend and
+/// the highest of `readings` (time, percent) taken by its end. A slice with no
+/// reading inside it has no percent; from `fullAt` on, the limit is at 100%.
+function slices(
+  calls: LimitCall[],
+  readings: Array<{ at: number; pct: number }>,
+  from: number,
+  to: number,
+  size: number,
+  now: number,
+  fullAt: number | null,
+): Slice[] {
+  const out: Slice[] = []
+  let highest: number | null = null
+  let r = 0
+  for (let start = from; start < to && start <= now; start += size) {
+    const end = Math.min(start + size, to)
+    const spend = spendIn(calls, start, end)
+    let inside = false
+    while (r < readings.length && readings[r]!.at < end) {
+      if (readings[r]!.at >= start) inside = true
+      highest = Math.max(highest ?? 0, readings[r]!.pct)
+      r++
+    }
+    let pct = inside ? highest : null
+    if (fullAt !== null && fullAt < end) pct = 100
+    out.push({ start, end, spentUSD: spend.spentUSD, tokens: totalTokens(spend.tokens), pct })
+  }
+  return out
+}
+
 // ---------------------------------------------------------------------------
 // The computation
 // ---------------------------------------------------------------------------
@@ -485,6 +570,15 @@ export function computeClaudeLimits(input: LimitsInput): LimitsOutput {
     }
 
     const outsideThisMac = fiveHourPct !== null && fiveHourPct >= 1 && spend.spentUSD < OUTSIDE_THIS_MAC_USD
+    const hours = slices(
+      calls,
+      sessionReadings.map(r => ({ at: r.at, pct: r.fiveHour!.pct })),
+      window.start,
+      window.end,
+      HOUR_MS,
+      now,
+      ranOutEvent?.at ?? null,
+    ).map(h => ({ start: iso(h.start), end: iso(h.end), spentUSD: h.spentUSD, tokens: h.tokens, fiveHourPct: h.pct }))
 
     const out: SessionOut = {
       id: iso(window.key),
@@ -506,6 +600,8 @@ export function computeClaudeLimits(input: LimitsInput): LimitsOutput {
       outsideThisMac,
       unpricedModels: [...spend.unpriced].sort(),
       chats: chatsIn(calls, window.start, window.end),
+      models: modelsIn(calls, window.start, window.end),
+      hours,
     }
     const gap = gapFor(gaps, window, sessionReadings.length > 0, fiveHourQuality, weekQuality)
     if (gap) out.gap = gap
@@ -550,6 +646,35 @@ export function computeClaudeLimits(input: LimitsInput): LimitsOutput {
     if (at < 100) runsOutFirstAtSessionPct = Math.max(currentSession.fiveHourPct, Math.round(at))
   }
 
+  // Each week's sessions, as blocks of that week. A session the week reset
+  // inside belongs to both weeks, with its part of each.
+  weeks.forEach((w, i) => {
+    weekOuts[i]!.sessions = calcs.flatMap((c): WeekSession[] => {
+      if (c.window.end <= w.start || c.window.start >= w.end) return []
+      const split = c.out.weekSplit
+      let pct: number | null
+      if (split) {
+        pct = w.start >= Date.parse(split.resetAt) ? split.thisWeek : split.lastWeek
+      } else {
+        if (weekAt(weeks, c.firstCallAt ?? c.window.start) !== w) return []
+        pct = c.out.weekPct
+      }
+      return [{
+        id: c.out.id,
+        start: c.out.start,
+        end: c.out.end,
+        running: c.out.running,
+        spentUSD: c.out.spentUSD,
+        weekPct: pct,
+        weekQuality: pct === null ? 'unknown' : c.out.weekQuality,
+      }]
+    })
+  })
+  if (currentWeekIndex > 0) {
+    const same = previousAtSamePoint(weeks[currentWeekIndex]!, weeks[currentWeekIndex - 1]!, readings, events, calls, callTimes, now)
+    if (same) weekOuts[currentWeekIndex]!.previousAtSamePoint = same
+  }
+
   const listFrom = now - SESSION_LIST_MS
   const sessions = calcs
     .filter(c => c.out.running || (c.window.end > listFrom && c.window.start <= now))
@@ -561,6 +686,12 @@ export function computeClaudeLimits(input: LimitsInput): LimitsOutput {
     const w = weeks[i]!
     if (w.start > now) continue
     weekList.push(weekOuts[i]!)
+  }
+
+  const fullWeeks = weekList.filter(w => !w.running && w.fullWeekUSD !== undefined)
+  const fullWeekAverage = {
+    usd: fullWeeks.length > 0 ? fullWeeks.reduce((s, w) => s + w.fullWeekUSD!, 0) / fullWeeks.length : null,
+    basis: fullWeeks.length,
   }
 
   const lastReading = readings.filter(r => !r.imported).at(-1) ?? readings.at(-1)
@@ -576,6 +707,7 @@ export function computeClaudeLimits(input: LimitsInput): LimitsOutput {
     },
     sessionsLeft,
     runsOutFirstAtSessionPct,
+    fullWeekAverage,
     sessions,
     weeks: weekList,
     gaps: gaps.filter(g => Date.parse(g.to) >= now - (WEEK_LIST_COUNT + 1) * WEEK_MS),
@@ -610,6 +742,15 @@ function computeWeek(w: WeekWindow, readings: LimitReading[], events: LimitEvent
       fullWeekQuality = 'estimated'
     }
   }
+  const days = slices(
+    calls,
+    inWeek.map(r => ({ at: r.at, pct: r.sevenDay!.pct })),
+    w.start,
+    w.end,
+    DAY_MS,
+    now,
+    ranOut?.at ?? null,
+  ).map(d => ({ start: iso(d.start), end: iso(d.end), spentUSD: d.spentUSD, tokens: d.tokens, usedPct: d.pct }))
   return {
     start: iso(w.start),
     end: iso(w.end),
@@ -624,6 +765,37 @@ function computeWeek(w: WeekWindow, readings: LimitReading[], events: LimitEvent
     fullWeekQuality,
     ...(ranOut ? { ranOutAt: iso(ranOut.at) } : {}),
     unpricedModels: [...spend.unpriced].sort(),
+    models: modelsIn(calls, w.start, to),
+    days,
+    sessions: [],
+  }
+}
+
+/// The previous week as it stood the same time into it as `now` is into the
+/// current one. Skipped when the previous week was cut short before that point.
+function previousAtSamePoint(
+  current: WeekWindow,
+  previous: WeekWindow,
+  readings: LimitReading[],
+  events: LimitEvent[],
+  calls: LimitCall[],
+  callTimes: number[],
+  now: number,
+): WeekOut['previousAtSamePoint'] {
+  const at = previous.start + (now - current.start)
+  if (at >= previous.end) return undefined
+  const spentUSD = spendIn(calls, previous.start, at + 1).spentUSD
+  const ranOut = events.find(e => e.limit === 'seven_day' && e.at >= previous.start && e.at <= at)
+  if (ranOut) return { at: iso(at), spentUSD, usedPct: 100, usedQuality: 'exact' }
+  const inWeek = readings.filter(r => r.sevenDay && windowKey(r.sevenDay.resetsAt) === previous.key && r.at >= previous.start && r.at <= at)
+  if (inWeek.length === 0) return { at: iso(at), spentUSD, usedPct: null, usedQuality: 'unknown' }
+  const last = inWeek[inWeek.length - 1]!
+  const lastCall = prevBefore(callTimes, at + 1)
+  return {
+    at: iso(at),
+    spentUSD,
+    usedPct: Math.max(...inWeek.map(r => r.sevenDay!.pct)),
+    usedQuality: lastCall === null || lastCall < previous.start || last.at >= lastCall ? 'measured' : 'lowerBound',
   }
 }
 
