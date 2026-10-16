@@ -50,13 +50,21 @@ struct ClaudeSessionsLayoutTests {
             }
             .environment(store)
         )
+        let running = try #require(report.current.session)
+        let hours = try render("sessions-hours", ClaudeSessionsList(report: report, expanded: running.id, tab: .hours).environment(store))
+        let models = try render("sessions-models", ClaudeSessionsList(report: report, expanded: running.id, tab: .models).environment(store))
         let weeks = try render(
             "weeks",
-            ClaudeWeeksList(weeks: report.weeks, expanded: report.weeks[1].start).environment(store)
+            ClaudeWeeksList(report: report, weekPace: 86, expanded: report.weeks[1].start).environment(store)
+        )
+        let weekDays = try render("weeks-days", ClaudeWeeksList(report: report, expanded: report.weeks[0].start).environment(store))
+        let weekSessions = try render(
+            "weeks-sessions",
+            ClaudeWeeksList(report: report, expanded: report.weeks[0].start, tab: .sessions).environment(store)
         )
         let row = try render("all-tab", ClaudeSessionAllTabRow(report: report).environment(store))
         // The renders keep the popover width: nothing pushes the content wider.
-        for size in [sessions, weeks, row] {
+        for size in [sessions, hours, models, weeks, weekDays, weekSessions, row] {
             #expect(size.width == Self.contentWidth + 28)
         }
         // The All-tab row stays one line (28pt of it is the render padding).
@@ -75,15 +83,26 @@ struct ClaudeSessionsLayoutTests {
             let measured = (text as NSString).size(withAttributes: [.font: NSFont.systemFont(ofSize: size, weight: weight)]).width
             return measured + tracking * CGFloat(text.count)
         }
-        let header: (String) -> CGFloat = { width($0, 8.5, .semibold, tracking: 0.3) }
-        #expect(header("Spent") <= 58)
-        #expect(header("5h") <= 38)
-        #expect(header("Week") <= 44)
-        #expect(header("Used") <= 38)
-        #expect(header("Full week") <= 62)
-        // Caption, the three columns, the mark column and the 4pt gaps.
-        #expect(header("5-HOUR SESSIONS · API PRICES") + 58 + 38 + 44 + 14 + 5 * 4 <= Self.contentWidth)
-        #expect(header("WEEKS · API PRICES") + 58 + 38 + 62 + 14 + 5 * 4 <= Self.contentWidth)
+        // Column headers are upper-cased in the view.
+        func header(_ key: String) -> CGFloat {
+            let text = L10n.lookup(key, in: bundle).uppercased(with: Locale(identifier: language))
+            let measured = (text as NSString).size(withAttributes: [.font: NSFont.systemFont(ofSize: 8.5, weight: .semibold)]).width
+            return measured + 0.3 * CGFloat(text.count)
+        }
+        // Headers are right-aligned and may lean left into the gap and the
+        // unused part of the column before them, never onto its header.
+        // Sessions: Spent 40, the 5-hour meter and percent 80, Week 34.
+        #expect(header("5-hour") <= 80)
+        #expect(header("Week") <= 34 + 4 + (80 - header("5-hour")))
+        #expect(header("API prices") + 4 + header("Spent") + 4 + 80 + 4 + 34 <= Self.contentWidth)
+        // Weeks: Spent 46, the strip and percent 92, Full week 56.
+        #expect(header("Spent") <= 46)
+        #expect(header("Used") <= 92)
+        #expect(header("Full week") <= 56 + 4 + (92 - header("Used")))
+        // The section title next to the Sessions | Weeks switch.
+        let title = width("Last 4 weeks", 11, .semibold) + width(" · ", 11, .medium) + width("API prices", 11, .medium)
+        let toggle = width("Sessions", 10, .semibold) + width("Weeks", 10, .semibold) + 4 * 9 + 4
+        #expect(title * 0.85 + 6 + toggle <= Self.contentWidth)
         // The All-tab row: 14pt insets, the label, the value at its 0.85
         // minimum scale ("61% · $116 · ≈+8% of week" in 10.5pt mono is about
         // 190pt), the chevron.

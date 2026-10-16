@@ -398,3 +398,123 @@ describe('closure', () => {
     expect(Math.abs(shares - Math.round(finalWeek))).toBeLessThanOrEqual(2)
   })
 })
+
+describe('breakdowns', () => {
+  const readings = [
+    reading('2026-10-15T01:50:00Z', { week: [20, WEEK_RESET] }),
+    reading('2026-10-15T02:30:00Z', { five: [10, '2026-10-15T07:00:00Z'], week: [21, WEEK_RESET] }),
+    reading('2026-10-15T06:10:00Z', { five: [70, '2026-10-15T07:00:00Z'], week: [29, WEEK_RESET] }),
+  ]
+  const calls = [
+    call('2026-10-15T02:05:00Z', 30, 'chat-a', { model: 'claude-opus-5' }),
+    call('2026-10-15T06:00:00Z', 90, 'chat-a', { model: 'claude-sonnet-5' }),
+    call('2026-10-15T06:05:00Z', 5, 'chat-a', { model: 'claude-opus-5' }),
+  ].map(c => ({ ...c, modelName: c.model === 'claude-opus-5' ? 'Opus 5' : 'Sonnet 5' }))
+
+  it('cuts a session into hours with the 5-hour percent read inside each', () => {
+    const out = computeClaudeLimits(input({ now: '2026-10-15T12:00:00Z', readings, calls }))
+    const s = out.sessions.find(x => x.id === '2026-10-15T07:00:00.000Z')!
+    expect(s.hours.map(h => [h.start, h.spentUSD, h.fiveHourPct])).toEqual([
+      ['2026-10-15T02:00:00.000Z', 30, 10],
+      ['2026-10-15T03:00:00.000Z', 0, null],
+      ['2026-10-15T04:00:00.000Z', 0, null],
+      ['2026-10-15T05:00:00.000Z', 0, null],
+      ['2026-10-15T06:00:00.000Z', 95, 70],
+    ])
+    expect(s.hours[0]!.tokens).toBe(1130)
+  })
+
+  it('stops a running session’s hours at now', () => {
+    const out = computeClaudeLimits(input({ now: '2026-10-15T03:15:00Z', readings: readings.slice(0, 2), calls: calls.slice(0, 1) }))
+    expect(out.current.session!.hours.map(h => h.start)).toEqual(['2026-10-15T02:00:00.000Z', '2026-10-15T03:00:00.000Z'])
+  })
+
+  it('puts a session at 100% from the hour its limit ran out', () => {
+    const out = computeClaudeLimits(input({
+      now: '2026-10-15T12:00:00Z',
+      readings,
+      calls,
+      events: [{ limit: 'five_hour', at: t('2026-10-15T04:30:00Z'), resetsAt: t('2026-10-15T07:00:00Z') }],
+    }))
+    const s = out.sessions.find(x => x.id === '2026-10-15T07:00:00.000Z')!
+    expect(s.hours.map(h => h.fiveHourPct)).toEqual([10, null, 100, 100, 100])
+  })
+
+  it('splits spend by model, most expensive first', () => {
+    const out = computeClaudeLimits(input({ now: '2026-10-15T12:00:00Z', readings, calls }))
+    const s = out.sessions.find(x => x.id === '2026-10-15T07:00:00.000Z')!
+    expect(s.models).toEqual([
+      { model: 'Sonnet 5', spentUSD: 90, tokens: 1130 },
+      { model: 'Opus 5', spentUSD: 35, tokens: 2260 },
+    ])
+    expect(out.current.week!.models.map(m => m.model)).toEqual(['Sonnet 5', 'Opus 5'])
+  })
+
+  it('cuts a week into days from its reset, up to now', () => {
+    const out = computeClaudeLimits(input({ now: '2026-10-16T12:00:00Z', readings, calls }))
+    const week = out.current.week!
+    expect(week.days.map(d => [d.start, d.spentUSD, d.usedPct])).toEqual([
+      ['2026-10-14T08:00:00.000Z', 125, 29],
+      ['2026-10-15T08:00:00.000Z', 0, null],
+      ['2026-10-16T08:00:00.000Z', 0, null],
+    ])
+  })
+
+  it('lists a week’s sessions with their share of it', () => {
+    const out = computeClaudeLimits(input({ now: '2026-10-16T12:00:00Z', readings, calls }))
+    expect(out.current.week!.sessions).toEqual([{
+      id: '2026-10-15T07:00:00.000Z',
+      start: '2026-10-15T02:00:00.000Z',
+      end: '2026-10-15T07:00:00.000Z',
+      running: false,
+      spentUSD: 125,
+      weekPct: 9,
+      weekQuality: 'measured',
+    }])
+  })
+
+  it('gives a session the week reset inside to both weeks, with its part of each', () => {
+    const out = computeClaudeLimits(input({
+      now: '2026-10-14T12:00:00Z',
+      readings: [
+        reading('2026-10-14T05:50:00Z', { week: [80, PREV_WEEK_RESET] }),
+        reading('2026-10-14T07:55:00Z', { five: [50, '2026-10-14T11:00:00Z'], week: [84, PREV_WEEK_RESET] }),
+        reading('2026-10-14T10:30:00Z', { five: [90, '2026-10-14T11:00:00Z'], week: [5, WEEK_RESET] }),
+      ],
+      calls: [call('2026-10-14T06:30:00Z', 40), call('2026-10-14T07:50:00Z', 10), call('2026-10-14T10:20:00Z', 40)],
+    }))
+    expect(out.weeks[0]!.sessions.map(s => s.weekPct)).toEqual([5])
+    expect(out.weeks[1]!.sessions.map(s => s.weekPct)).toEqual([4])
+  })
+
+  it('compares the running week with the previous one at the same point', () => {
+    const out = computeClaudeLimits(input({
+      now: '2026-10-16T08:00:00Z',
+      readings: [
+        reading('2026-10-08T09:00:00Z', { week: [30, PREV_WEEK_RESET] }),
+        reading('2026-10-09T07:00:00Z', { week: [41, PREV_WEEK_RESET] }),
+        reading('2026-10-10T07:00:00Z', { week: [60, PREV_WEEK_RESET] }),
+        reading('2026-10-16T07:00:00Z', { week: [32, WEEK_RESET] }),
+      ],
+      calls: [call('2026-10-08T08:30:00Z', 300), call('2026-10-09T06:00:00Z', 225), call('2026-10-09T09:00:00Z', 500), call('2026-10-16T06:00:00Z', 409)],
+    }))
+    expect(out.current.week!.previousAtSamePoint).toEqual({
+      at: '2026-10-09T08:00:00.000Z',
+      spentUSD: 525,
+      usedPct: 41,
+      usedQuality: 'measured',
+    })
+  })
+
+  it('averages the full-week values of past weeks that have one', () => {
+    const out = computeClaudeLimits(input({
+      now: '2026-10-16T08:00:00Z',
+      readings: [
+        reading('2026-10-13T07:00:00Z', { week: [50, PREV_WEEK_RESET] }),
+        reading('2026-10-16T07:00:00Z', { week: [10, WEEK_RESET] }),
+      ],
+      calls: [call('2026-10-12T06:00:00Z', 600), call('2026-10-16T06:00:00Z', 100)],
+    }))
+    expect(out.fullWeekAverage).toEqual({ usd: 1200, basis: 1 })
+  })
+})

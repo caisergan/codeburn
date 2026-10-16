@@ -1,7 +1,9 @@
 # Claude session and week usage
 
-Status: implemented (V1, 2026-10-14). Where the implementation settled a detail the
-spec left open, see Implementation notes at the end.
+Status: implemented (V1, 2026-10-14). The Sessions and Weeks lists were
+redesigned on 2026-10-17 (week strip, day groups, tabbed rows); this document
+describes the redesign. Where the implementation settled a detail the spec left
+open, see Implementation notes at the end.
 
 Surface: native macOS menu bar (`mac/`), computed by the CLI (`src/`)
 
@@ -126,67 +128,106 @@ A full 5-hour session ≈ 12% of your week · ≈ 7 left
 
 ### Sessions and Weeks
 
-A two-pill switch under the summary line, remembered across launches,
-defaulting to Sessions.
+Under the bars sits a title, `This week · 32% used` or `Last 4 weeks · API
+prices`, with a Sessions | Weeks switch beside it, remembered across launches
+and defaulting to Sessions. When a limit ran out, or the week will run out
+before the current session, a warning callout above the title says so (the
+lines in Claude › Plan above); otherwise there is no summary line.
 
-Sessions lists every 5-hour session that ended in the last seven days, newest
-first. The running session is pinned on top with a live dot, and a divider
-marks each weekly reset in range:
+Sessions starts with the **week strip**: the current week's used share split
+into one block per session, oldest on the left, each as wide as its share of
+the week, the running session in the lighter accent. A striped block after
+them is as wide as one full session. Pointing at a block lights up its row and
+the other way round; clicking a block opens its row. Under the strip:
+`1 block = 1 session` on the left and `full session ≈ 8% · ≈ 8 left` on the
+right (or "Not enough sessions yet to measure").
+
+The list holds every 5-hour session of the last seven days, newest first,
+grouped under the local day it started (`TODAY · FRI  $32`, `YESTERDAY · THU
+$151`, `WED  $228`, each with the day's total), with a divider at each weekly
+reset in range:
 
 ```
-5-HOUR SESSIONS · API PRICES         Spent      5h     Week
-● Today 11:00–16:00                  $116      61%     +8%
+This week · 32% used                         [Sessions|Weeks]
+[███|██|█|███|██|█|▌|██░░░░ stripes ░░                       ]
+1 block = 1 session               full session ≈ 8% · ≈ 8 left
+API PRICES                    SPENT        5-HOUR      WEEK
+TODAY · FRI                                             $32
+■ 21:10–02:10 · now            $30   ▬▬──────  30%     +3%
+■ 16:10–21:10                   $2   ────────   3%     +0%
+YESTERDAY · THU                                        $151
+■ 20:10–01:10                  $43   ▬▬▬▬────  44%     +3%
 ── week reset · Wed 11:00 ────────────────────────────────
-  Today 00:20–05:20                  $130       –      +7%  ⚠︎
-  Tue 19:20–00:20                    $185      99%    +12%
-  Tue 14:20–19:20                    $175      83%    +12%
-  Tue 09:20–14:20                    $114      51%     +6%
-  Show all 23 ›
+Show all 23 ›
 ```
 
+- The square before each row has its strip block's color. The running row has
+  an accent background and says `now`. There are no chevrons: the whole row is
+  a button and lights up on hover.
+- The 5-hour column is a meter and a percent; the meter turns accent at 90%.
 - Eight rows are shown, then `Show all N ›` expands the list in place.
-- `⚠︎` marks a session in which a limit ran out; the expanded row says which
-  limit and when.
+- `⚠︎` after the time marks a session in which a limit ran out.
 - `–` means no reading exists for that value, `≈` marks an estimate and `≥` a
   lower bound. See Display rules.
-- A session that crossed a weekly reset shows this week's part in the Week
-  column and both parts in its expanded row.
 
-Clicking a row expands it in place, in the accordion style of the Stats
-insight's top projects:
+Clicking a row opens it in place. The open row drops the old Spent / 5-hour /
+Week tiles, which repeated the row, for one line of what the row does not say,
+`375M tokens  full session ≈ $190`, and a Chats | Hours | Models switch. The
+chosen tab is shared by every open row, so switching to Hours compares
+sessions.
 
-```
-▾ Tue 19:20–00:20                    $185      99%    +12%
-  ┌ Spent ───────┐ ┌ 5-hour ──────┐ ┌ Week ────────┐
-  │ $184.87      │ │ 99%          │ │ +12%         │
-  │ 563M tokens  │ │ measured     │ │ 81% → 93%    │
-  └──────────────┘ └──────────────┘ └──────────────┘
-  A full session would have cost ≈ $187
-  Chats, by share of this session's spend
-   api-server · “refactor the auth flow…”     $31   17%
-   web · “fix the onboarding layout…”         $26   14%
-   docs · “update the release notes…”         $25   14%
-   22 more                                   $104   56%
-```
+- **Chats**: the top three chats and `N more`, each with a bar behind it as
+  wide as its share of the session's spend. A chat's title is its own title,
+  else its project plus the start of its first prompt; subagents fold into
+  their parent.
+- **Hours**: one bar per hour of the window with its spend, and a line for the
+  5-hour percent at the end of each hour (dashed across hours with no
+  reading). A running session shows the hours ahead striped, and a dashed
+  `now` marker. Pointing at a bar reads `18:10–19:10 · $9 · 5h 6% → 15%`.
+- **Models**: spend and tokens per model, with share bars.
+- Warnings sit under the tab as callouts: `Ran out at 17:32 after $101.75`,
+  `Week ran out at …`, `Used outside this Mac …`, missing readings and
+  unpriced models. A session the week reset inside adds `The week reset at …:
+  +2% this week, +3% last week`.
 
-- A session that hit its 5-hour limit shows `Ran out at 17:32 after $101.75`
-  instead of the "full session" line, because that value is measured exactly.
-- A chat's title is its own title, else its project plus the start of its first
-  prompt. Subagents are folded into their parent chat.
-- Chat percentages are shares of the session's dollars, not of the limit.
-
-Weeks lists the current week and the three before it:
+Weeks lists the current week and the three before it, under two lines of
+context:
 
 ```
-WEEKS · API PRICES                Spent     Used     Full week
-This week · since Wed 11:00        $118       8%     ≈ $1,470
-Oct 7 → Oct 14                   $1,491     100%       $1,491  ⚠︎
-Sep 30 → Oct 7                   $1,075      89%     ≈ $1,210
-Sep 28 → Sep 30 · reset moved      $276      41%            –
+Last 4 weeks · API prices                    [Sessions|Weeks]
+┌ THIS WEEK VS LAST, SAME POINT (FRI 01:26)          −22% ┐
+│ This week  ▬▬▬▬────────────────────────      $409 · 32% │
+│ Last week  ▬▬▬▬▬───────────────────────      $525 · 41% │
+└─────────────────────────────────────────────────────────┘
+avg full week ≈ $1,386               this week on pace for 86%
+                        SPENT            USED      FULL WEEK
+This week · since Wed    $409  ▮▮▮▮▮▮▮──   32%    ≈ $1,279
+Oct 7–14   RAN OUT     $1,492  ▮▮▮▮▮▮▮▮▮  100%      $1,492
 ```
 
-A week that ran out shows `⚠︎`, and its expanded row gives the time. A week cut
-short by an early reset or a moved reset day shows its real start and end.
+- The comparison is the previous week as it stood the same time into it as
+  now is into this week; the figure on the right is the change in spend. It is
+  left out when the previous week was cut short before that point.
+- The average is over the listed past weeks with a full-week value; the pace
+  is the 7-day bar's own linear projection, left out when it falls back to the
+  last cycle.
+- Each row's Used column is a small strip of that week's sessions (gray for
+  past weeks, deep accent for a week that ran out) and a percent. A week that
+  ran out carries a `RAN OUT` chip.
+
+An open week has `900M tokens  8 sessions` and a Days | Sessions | Models
+switch:
+
+- **Days**: one bar per 24 hours from the weekly reset, with the week percent
+  as a line; days ahead are striped in the running week. Pointing at a bar
+  reads `Thu · $151 · week 17% → 29%`.
+- **Sessions**: the four sessions that took the most of the week, with a bar
+  and their share, `N more`, and for the running week `All in Sessions ›`,
+  which switches the list.
+- **Models**: as for a session.
+- `Ran out Tue 03:47` is a callout. A week cut short by a moved reset says so
+  and shows no full-week value; a week with no readings at its start says its
+  dates are inferred.
 
 ### Trend › Hours
 
@@ -374,11 +415,15 @@ Exact. A daylight-saving change day has 23 or 25 bars.
 
 ## Visual contract
 
-- No new navigation. Rows expand in place, and the Sessions | Weeks and
-  Days | Hours switches use the existing pill style (`TrendMetricToggle`).
+- No new navigation. Rows expand in place. Sessions | Weeks and the tabs of an
+  open row use a gray segmented track with the chosen option raised
+  (`ClaudeSegmented`); Trend's Days | Hours keeps the pill style
+  (`TrendMetricToggle`).
 - Reuse `UtilizationRow` and `UtilizationBar` for the session and week bars,
-  `MiniStat` for the expanded-row tiles, `TrendChart` and `BarTooltipCard` for
-  Hours, `SectionCaption` for captions, and the active accent preset.
+  `TrendChart` and `BarTooltipCard` for Trend › Hours, and the active accent
+  preset. Warnings use the quota banner's palette (`QuotaWarningPalette`).
+- Upper-case captions are cased in CodeBurn's display language, not the Mac's
+  region, so a Turkish-region Mac does not print "API PRİCES".
 - Figures use `Font.codeMono` with monospaced digits, like the rest of the
   popover.
 - The popover stays 360 points wide. Every new row must fit in all six locales;
@@ -439,11 +484,34 @@ Session: { start, end, startInferred, spentUSD,
            weekSplit?: { thisWeek, lastWeek },
            fullSessionUSD?, fullSessionQuality,
            ranOut?: { limit, at }, outsideThisMac, unpricedModels,
-           chats: [{ sessionId, title, spentUSD }] }
+           chats: [{ sessionId, title, spentUSD }],
+           models: [{ model, spentUSD, tokens }],
+           hours: [{ start, end, spentUSD, tokens, fiveHourPct }] }
 
 Week:    { start, end, endReason, spentUSD, tokens, usedPct, usedQuality,
-           fullWeekUSD?, fullWeekQuality, ranOutAt? }
+           fullWeekUSD?, fullWeekQuality, ranOutAt?,
+           models: [{ model, spentUSD, tokens }],
+           days: [{ start, end, spentUSD, tokens, usedPct }],
+           sessions: [{ id, start, end, running, spentUSD,
+                        weekPct, weekQuality }],
+           previousAtSamePoint?: { at, spentUSD, usedPct, usedQuality } }
+
+Top level also has "fullWeekAverage": { "usd": 1386, "basis": 2 }.
 ```
+
+- `hours` cut a session into hours from its start and `days` cut a week into
+  24-hour slices from its reset, up to now. A slice's percent is the highest
+  reading taken by its end, `null` when no reading fell inside it, and 100 from
+  the slice in which the limit ran out.
+- `models` groups calls by display name ("Opus 5.5"), most expensive first.
+- A week's `sessions` are its sessions oldest first, each with its share of
+  that week; a session the week reset inside appears in both weeks with its
+  part of each.
+- `previousAtSamePoint` is on the running week only: the previous week's spend
+  up to the same offset from its start, and its highest reading by then
+  (`lowerBound` when calls came after that reading).
+- The app decodes every one of these as optional, so it keeps working against
+  an older CLI and only hides the tabs it has no data for.
 
 Each `*Quality` is `exact` (from a refused request), `measured`, `lowerBound`,
 `estimated` or `unknown`. Money is in USD; the app converts it to the display
@@ -573,6 +641,10 @@ On a real machine:
   measured about 45 ms against a 30-day history of 47,000 calls.
 - **Dates inside localized lines** follow CodeBurn's display language, so an
   English UI on a Turkish-region Mac says "Wed", not "Çar".
+- **Past weeks are labelled `Oct 7–14`** (`Sep 30–Oct 7` across months), so
+  a `RAN OUT` chip fits beside the label.
+- **No shrink-to-fit in list rows.** In the offscreen renders SwiftUI applied
+  `minimumScaleFactor` to week rows that had room, so rows truncate instead.
 - **The running week's row** shows its start weekday only ("This week · since
   Wed"); the time is in the expanded row, because the full form does not fit
   360 points next to four columns.

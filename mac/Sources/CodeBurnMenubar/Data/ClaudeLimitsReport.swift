@@ -50,6 +50,62 @@ struct ClaudeLimitsReport: Decodable, Equatable, Sendable {
         var id: String { sessionId }
     }
 
+    struct Model: Decodable, Equatable, Sendable, Identifiable {
+        let model: String
+        let spentUSD: Double
+        let tokens: Double
+        var id: String { model }
+    }
+
+    /// One slice of a session (an hour) or of a week (24 hours from its
+    /// reset). `pct` is the highest reading taken by the slice's end; nil
+    /// when no reading fell inside it.
+    struct Slice: Decodable, Equatable, Sendable, Identifiable {
+        let start: Date
+        let end: Date
+        let spentUSD: Double
+        let tokens: Double
+        let pct: Double?
+        var id: Date { start }
+
+        private enum CodingKeys: String, CodingKey { case start, end, spentUSD, tokens, fiveHourPct, usedPct }
+
+        init(start: Date, end: Date, spentUSD: Double, tokens: Double, pct: Double?) {
+            self.start = start
+            self.end = end
+            self.spentUSD = spentUSD
+            self.tokens = tokens
+            self.pct = pct
+        }
+
+        init(from decoder: Decoder) throws {
+            let c = try decoder.container(keyedBy: CodingKeys.self)
+            start = try c.decode(Date.self, forKey: .start)
+            end = try c.decode(Date.self, forKey: .end)
+            spentUSD = try c.decode(Double.self, forKey: .spentUSD)
+            tokens = try c.decode(Double.self, forKey: .tokens)
+            pct = try c.decodeIfPresent(Double.self, forKey: .fiveHourPct) ?? c.decodeIfPresent(Double.self, forKey: .usedPct)
+        }
+    }
+
+    /// A session as one block of a week.
+    struct WeekSession: Decodable, Equatable, Sendable, Identifiable {
+        let id: String
+        let start: Date
+        let end: Date
+        let running: Bool
+        let spentUSD: Double
+        let weekPct: Double?
+        let weekQuality: Quality
+    }
+
+    struct SamePoint: Decodable, Equatable, Sendable {
+        let at: Date
+        let spentUSD: Double
+        let usedPct: Double?
+        let usedQuality: Quality
+    }
+
     struct RanOut: Decodable, Equatable, Sendable {
         enum Limit: String, Decodable, Sendable { case fiveHour = "five_hour", sevenDay = "seven_day" }
         let limit: Limit
@@ -91,6 +147,9 @@ struct ClaudeLimitsReport: Decodable, Equatable, Sendable {
         let unpricedModels: [String]
         let chats: [Chat]
         let gap: Gap?
+        /// Missing from CLIs older than the tabbed detail.
+        let models: [Model]?
+        let hours: [Slice]?
     }
 
     struct Week: Decodable, Equatable, Sendable, Identifiable {
@@ -116,8 +175,19 @@ struct ClaudeLimitsReport: Decodable, Equatable, Sendable {
         let fullWeekQuality: Quality
         let ranOutAt: Date?
         let unpricedModels: [String]
+        /// Missing from CLIs older than the tabbed detail.
+        let models: [Model]?
+        let days: [Slice]?
+        /// Oldest first.
+        let sessions: [WeekSession]?
+        let previousAtSamePoint: SamePoint?
 
         var id: Date { start }
+    }
+
+    struct FullWeekAverage: Decodable, Equatable, Sendable {
+        let usd: Double?
+        let basis: Int
     }
 
     struct Current: Decodable, Equatable, Sendable {
@@ -139,6 +209,7 @@ struct ClaudeLimitsReport: Decodable, Equatable, Sendable {
     let rate: Rate
     let sessionsLeft: Int?
     let runsOutFirstAtSessionPct: Double?
+    let fullWeekAverage: FullWeekAverage?
     let sessions: [Session]
     let weeks: [Week]
     let gaps: [Gap]

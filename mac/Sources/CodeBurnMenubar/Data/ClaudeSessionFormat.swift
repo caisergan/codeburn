@@ -104,10 +104,34 @@ enum ClaudeSessionFormat {
         return "\(f.string(from: start)) → \(f.string(from: end))"
     }
 
+    /// "Oct 7–14", "Sep 30–Oct 7": short enough for a row with a chip.
+    static func compactWeekRange(start: Date, end: Date, calendar: Calendar = .current, locale: Locale = L10n.activeLocale) -> String {
+        let first = DateFormatter()
+        first.locale = locale
+        first.timeZone = calendar.timeZone
+        first.setLocalizedDateFormatFromTemplate("MMM d")
+        let sameMonth = calendar.isDate(start, equalTo: end, toGranularity: .month)
+        let last = DateFormatter()
+        last.locale = locale
+        last.timeZone = calendar.timeZone
+        last.setLocalizedDateFormatFromTemplate(sameMonth ? "d" : "MMM d")
+        return "\(first.string(from: start))–\(last.string(from: end))"
+    }
+
     // MARK: - Lines
 
     /// The Plan view's summary line under the session and week bars.
     static func summaryLine(_ report: ClaudeLimitsReport, timeZone: TimeZone = .current) -> String {
+        if let warning = warningLine(report, timeZone: timeZone) { return warning }
+        guard let share = report.fullSessionWeekShare else {
+            return L("Not enough sessions yet to measure")
+        }
+        return L("A full 5-hour session ≈ %1$lld%% of your week · ≈ %2$lld left", Int(share.rounded()), report.sessionsLeft ?? 0)
+    }
+
+    /// A limit that ran out, or a week that will run out before the session;
+    /// nil when neither, and the week strip's legend says the rest.
+    static func warningLine(_ report: ClaudeLimitsReport, timeZone: TimeZone = .current) -> String? {
         if let week = report.current.week, let ranOut = week.ranOutAt {
             return L("Week ran out at %1$@ · resets %2$@", clock(ranOut, timeZone: timeZone), weekdayClock(week.end, timeZone: timeZone))
         }
@@ -123,10 +147,7 @@ enum ClaudeSessionFormat {
         if let at = report.runsOutFirstAtSessionPct {
             return L("Week runs out first, at about %lld%% of this session", Int(at.rounded()))
         }
-        guard let share = report.fullSessionWeekShare else {
-            return L("Not enough sessions yet to measure")
-        }
-        return L("A full 5-hour session ≈ %1$lld%% of your week · ≈ %2$lld left", Int(share.rounded()), report.sessionsLeft ?? 0)
+        return nil
     }
 
     /// The All tab's one-line summary, after its "Claude session" label.
