@@ -53,6 +53,7 @@ struct ClaudeSessionsLayoutTests {
         let running = try #require(report.current.session)
         let hours = try render("sessions-hours", ClaudeSessionsList(report: report, expanded: running.id, tab: .hours).environment(store))
         let models = try render("sessions-models", ClaudeSessionsList(report: report, expanded: running.id, tab: .models).environment(store))
+        let chats = try render("sessions-chats", ClaudeSessionsList(report: report, expanded: running.id, openChat: "a").environment(store))
         let weeks = try render(
             "weeks",
             ClaudeWeeksList(report: report, weekPace: 86, expanded: report.weeks[1].start).environment(store)
@@ -64,7 +65,7 @@ struct ClaudeSessionsLayoutTests {
         )
         let row = try render("all-tab", ClaudeSessionAllTabRow(report: report).environment(store))
         // The renders keep the popover width: nothing pushes the content wider.
-        for size in [sessions, hours, models, weeks, weekDays, weekSessions, row] {
+        for size in [sessions, hours, models, chats, weeks, weekDays, weekSessions, row] {
             #expect(size.width == Self.contentWidth + 28)
         }
         // The All-tab row stays one line (28pt of it is the render padding).

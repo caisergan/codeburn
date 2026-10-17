@@ -27,6 +27,8 @@ const RATE_MAX_SESSIONS = 10
 const RATE_MIN_SESSIONS = 5
 /// A session whose 5-hour percent rose while this Mac spent less than this.
 const OUTSIDE_THIS_MAC_USD = 0.5
+/// The prompts a chat row carries for one session; the rest are only counted.
+const MAX_PROMPTS_PER_CHAT = 12
 
 export type LimitName = 'five_hour' | 'seven_day'
 export type Quality = 'exact' | 'measured' | 'lowerBound' | 'estimated' | 'unknown'
@@ -61,7 +63,13 @@ export type LimitCall = {
   unpriced: boolean
   chatId: string
   chatTitle: string
+  /// The chat's project folder name, and its path for `claude --resume`.
+  chatProject?: string
+  chatPath?: string
 }
+
+/// One prompt the user typed, cleaned of what tools wrapped around it.
+export type LimitPrompt = { at: number; chatId: string; text: string }
 
 export type LimitsInput = {
   now: number
@@ -69,11 +77,26 @@ export type LimitsInput = {
   failures: FailedCheck[]
   events: LimitEvent[]
   calls: LimitCall[]
+  /// Sorted by time; optional so callers without prompts need not pass any.
+  prompts?: LimitPrompt[]
 }
 
 export type Gap = { from: string; to: string; reason: string }
 
-export type ChatShare = { sessionId: string; title: string; spentUSD: number }
+export type ChatShare = {
+  sessionId: string
+  title: string
+  spentUSD: number
+  project?: string
+  path?: string
+  /// The chat's first and last call inside the window.
+  firstAt: string
+  lastAt: string
+  /// Prompts typed inside the window: all of them counted, the first
+  /// MAX_PROMPTS_PER_CHAT kept.
+  promptCount: number
+  prompts: Array<{ at: string; text: string }>
+}
 
 export type ModelShare = { model: string; spentUSD: number; tokens: number }
 
@@ -360,16 +383,59 @@ function spendIn(calls: LimitCall[], from: number, to: number): Spend {
   return out
 }
 
-function chatsIn(calls: LimitCall[], from: number, to: number): ChatShare[] {
-  const byChat = new Map<string, ChatShare>()
+function chatsIn(calls: LimitCall[], prompts: LimitPrompt[], from: number, to: number): ChatShare[] {
+  type Row = { share: ChatShare; first: number; last: number }
+  const byChat = new Map<string, Row>()
   for (let i = lowerBound(calls, from); i < calls.length; i++) {
     const call = calls[i]!
     if (call.at >= to) break
-    const row = byChat.get(call.chatId) ?? { sessionId: call.chatId, title: call.chatTitle, spentUSD: 0 }
-    row.spentUSD += call.costUSD
-    byChat.set(call.chatId, row)
+    let row = byChat.get(call.chatId)
+    if (!row) {
+      row = {
+        share: {
+          sessionId: call.chatId,
+          title: call.chatTitle,
+          spentUSD: 0,
+          ...(call.chatProject ? { project: call.chatProject } : {}),
+          ...(call.chatPath ? { path: call.chatPath } : {}),
+          firstAt: '',
+          lastAt: '',
+          promptCount: 0,
+          prompts: [],
+        },
+        first: call.at,
+        last: call.at,
+      }
+      byChat.set(call.chatId, row)
+    }
+    row.share.spentUSD += call.costUSD
+    row.first = Math.min(row.first, call.at)
+    row.last = Math.max(row.last, call.at)
   }
-  return [...byChat.values()].sort((a, b) => b.spentUSD - a.spentUSD || a.sessionId.localeCompare(b.sessionId))
+  // A prompt counts for a chat that spent in this window; one typed in a
+  // chat that did not is waiting on an answer that lands elsewhere.
+  for (let i = lowerBoundPrompts(prompts, from); i < prompts.length; i++) {
+    const prompt = prompts[i]!
+    if (prompt.at >= to) break
+    const row = byChat.get(prompt.chatId)
+    if (!row) continue
+    row.share.promptCount++
+    if (row.share.prompts.length < MAX_PROMPTS_PER_CHAT) row.share.prompts.push({ at: iso(prompt.at), text: prompt.text })
+  }
+  return [...byChat.values()]
+    .map(row => ({ ...row.share, firstAt: iso(row.first), lastAt: iso(row.last) }))
+    .sort((a, b) => b.spentUSD - a.spentUSD || a.sessionId.localeCompare(b.sessionId))
+}
+
+function lowerBoundPrompts(prompts: LimitPrompt[], at: number): number {
+  let lo = 0
+  let hi = prompts.length
+  while (lo < hi) {
+    const mid = (lo + hi) >>> 1
+    if (prompts[mid]!.at < at) lo = mid + 1
+    else hi = mid
+  }
+  return lo
 }
 
 function modelsIn(calls: LimitCall[], from: number, to: number): ModelShare[] {
@@ -442,6 +508,7 @@ export function computeClaudeLimits(input: LimitsInput): LimitsOutput {
   const now = input.now
   const readings = [...input.readings].sort((a, b) => a.at - b.at)
   const calls = [...input.calls].sort((a, b) => a.at - b.at)
+  const prompts = [...(input.prompts ?? [])].sort((a, b) => a.at - b.at)
   const events = firstEventPerWindow(input.events)
 
   const sessionWindows = buildSessionWindows(readings, events, calls)
@@ -599,7 +666,7 @@ export function computeClaudeLimits(input: LimitsInput): LimitsOutput {
       ...(ranOut ? { ranOut } : {}),
       outsideThisMac,
       unpricedModels: [...spend.unpriced].sort(),
-      chats: chatsIn(calls, window.start, window.end),
+      chats: chatsIn(calls, prompts, window.start, window.end),
       models: modelsIn(calls, window.start, window.end),
       hours,
     }

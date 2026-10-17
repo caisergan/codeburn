@@ -1,3 +1,4 @@
+import AppKit
 import SwiftUI
 
 // Claude › Plan: what each 5-hour session and each week cost at API prices,
@@ -622,12 +623,15 @@ struct ClaudeSessionsList: View {
     @State private var highlighted: String?
     /// One tab for every open row, so switching to Hours compares sessions.
     @State private var tab: ClaudeSessionDetailTab
+    private let openChat: String?
 
-    /// `expanded` and `tab` open one row from the start (layout tests).
-    init(report: ClaudeLimitsReport, expanded: String? = nil, tab: ClaudeSessionDetailTab = .chats) {
+    /// `expanded`, `tab` and `openChat` open a row and a chat from the start
+    /// (layout tests).
+    init(report: ClaudeLimitsReport, expanded: String? = nil, tab: ClaudeSessionDetailTab = .chats, openChat: String? = nil) {
         self.report = report
         self._expanded = State(initialValue: expanded)
         self._tab = State(initialValue: tab)
+        self.openChat = openChat
     }
 
     private static let collapsedCount = 8
@@ -699,7 +703,8 @@ struct ClaudeSessionsList: View {
                                 expanded = expanded == session.id ? nil : session.id
                             }
                         },
-                        tab: $tab
+                        tab: $tab,
+                        openChat: openChat
                     )
                 }
             }
@@ -883,6 +888,7 @@ private struct ClaudeSessionRow: View {
     let hover: (Bool) -> Void
     let toggle: () -> Void
     @Binding var tab: ClaudeSessionDetailTab
+    var openChat: String? = nil
 
     var body: some View {
         VStack(alignment: .leading, spacing: 0) {
@@ -939,7 +945,7 @@ private struct ClaudeSessionRow: View {
             .accessibilityHint(isOpen ? L("Hides session details") : L("Shows session details"))
 
             if isOpen {
-                ClaudeSessionDetail(session: session, tab: $tab)
+                ClaudeSessionDetail(session: session, tab: $tab, openChat: openChat)
                     .padding(.leading, 23)
                     .padding(.trailing, 10)
                     .padding(.top, 8)
@@ -982,6 +988,16 @@ private struct ClaudeSessionDetail: View {
 
     private static let chatRows = 3
     private static let modelRows = 4
+
+    /// One chat open at a time, showing its prompts.
+    @State private var openChat: String?
+    @State private var allChats = false
+
+    init(session: ClaudeLimitsReport.Session, tab: Binding<ClaudeSessionDetailTab>, openChat: String? = nil) {
+        self.session = session
+        self._tab = tab
+        self._openChat = State(initialValue: openChat)
+    }
 
     var body: some View {
         VStack(alignment: .leading, spacing: 8) {
@@ -1053,14 +1069,31 @@ private struct ClaudeSessionDetail: View {
         if session.chats.isEmpty {
             ClaudeNote(text: L("No chats on this Mac in this session"))
         } else {
+            let shown = allChats ? session.chats[...] : session.chats.prefix(Self.chatRows)
             VStack(alignment: .leading, spacing: 2) {
-                ForEach(session.chats.prefix(Self.chatRows)) { chat in
-                    ShareRow(title: chat.title, amount: money(chat.spentUSD), share: share(chat.spentUSD))
+                ForEach(shown) { chat in
+                    ClaudeChatRow(
+                        chat: chat,
+                        share: share(chat.spentUSD),
+                        isOpen: openChat == chat.id,
+                        toggle: {
+                            withAnimation(.spring(response: 0.3, dampingFraction: 0.85)) {
+                                openChat = openChat == chat.id ? nil : chat.id
+                            }
+                        }
+                    )
                 }
-                if session.chats.count > Self.chatRows {
-                    let rest = session.chats.dropFirst(Self.chatRows)
+                if session.chats.count > shown.count {
+                    let rest = session.chats.dropFirst(shown.count)
                     let spent = rest.reduce(0) { $0 + $1.spentUSD }
-                    ShareRow(title: L("%lld more", rest.count), amount: money(spent), share: share(spent), dim: true)
+                    Button {
+                        withAnimation(.easeInOut(duration: 0.18)) { allChats = true }
+                    } label: {
+                        ShareRow(title: L("%lld more", rest.count) + " ›", amount: money(spent), share: share(spent), dim: true)
+                            .contentShape(Rectangle())
+                    }
+                    .buttonStyle(.plain)
+                    .accessibilityHint(L("Shows every chat in this session"))
                 }
             }
         }
@@ -1148,6 +1181,170 @@ private struct ClaudeSessionDetail: View {
             ClaudeSessionFormat.percent(split.thisWeek, split.thisWeek == nil ? .unknown : .measured, signed: true),
             ClaudeSessionFormat.percent(split.lastWeek, split.lastWeek == nil ? .unknown : .measured, signed: true)
         )]
+    }
+}
+
+/// A chat in a session: its name, then its project, how many prompts it had
+/// and when it was active. Open, it lists those prompts.
+private struct ClaudeChatRow: View {
+    let chat: ClaudeLimitsReport.Chat
+    /// 0...1 of the session's spend.
+    let share: Double
+    let isOpen: Bool
+    let toggle: () -> Void
+
+    @State private var showAllPrompts = false
+    /// A prompt shown in full instead of two lines.
+    @State private var fullPrompt: ClaudeLimitsReport.Prompt?
+    @State private var copied = false
+
+    private static let promptRows = 3
+
+    var body: some View {
+        VStack(alignment: .leading, spacing: 0) {
+            Button(action: toggle) {
+                VStack(alignment: .leading, spacing: 1) {
+                    HStack(spacing: 6) {
+                        Text(chat.title)
+                            .font(.system(size: 10.5, weight: .semibold))
+                            .foregroundStyle(.primary)
+                            .lineLimit(1)
+                            .truncationMode(.tail)
+                        Spacer(minLength: 4)
+                        Text(money(chat.spentUSD))
+                            .font(.codeMono(size: 9.5, weight: .semibold))
+                            .foregroundStyle(.primary)
+                            .frame(minWidth: 34, alignment: .trailing)
+                        Text("\(Int((share * 100).rounded()))%")
+                            .font(.codeMono(size: 9.5, weight: .medium))
+                            .foregroundStyle(.tertiary)
+                            .frame(width: 28, alignment: .trailing)
+                    }
+                    if let detail {
+                        Text(detail)
+                            .font(.system(size: 9, weight: .medium))
+                            .foregroundStyle(.tertiary)
+                            .lineLimit(1)
+                    }
+                }
+                .monospacedDigit()
+                .padding(.horizontal, Columns.bleed)
+                .padding(.vertical, 3)
+                .background(alignment: .leading) {
+                    GeometryReader { geo in
+                        RoundedRectangle(cornerRadius: 4)
+                            .fill(Theme.brandAccent.opacity(isOpen ? 0.22 : 0.16))
+                            .frame(width: geo.size.width * min(max(share, 0), 1))
+                    }
+                }
+                .contentShape(Rectangle())
+            }
+            .buttonStyle(.plain)
+            .disabled(!canOpen)
+            .padding(.horizontal, -Columns.bleed)
+            .accessibilityElement(children: .combine)
+            .accessibilityHint(canOpen ? (isOpen ? L("Hides this chat's prompts") : L("Shows this chat's prompts")) : "")
+
+            if isOpen {
+                prompts
+                    .padding(.top, 5)
+                    .padding(.bottom, 4)
+                    .transition(.opacity)
+            }
+        }
+    }
+
+    /// "codeburn · 4 prompts · 23:13–23:53"; nil from an older CLI.
+    private var detail: String? {
+        var parts: [String] = []
+        if let project = chat.project, project != chat.title { parts.append(project) }
+        if let count = chat.promptCount, count > 0 {
+            parts.append(count == 1 ? L("1 prompt") : L("%lld prompts", count))
+        }
+        if let first = chat.firstAt, let last = chat.lastAt {
+            let from = ClaudeSessionFormat.clock(first)
+            let to = ClaudeSessionFormat.clock(last)
+            parts.append(from == to ? from : "\(from)–\(to)")
+        }
+        return parts.isEmpty ? nil : parts.joined(separator: " · ")
+    }
+
+    private var canOpen: Bool {
+        !(chat.prompts ?? []).isEmpty || chat.path != nil
+    }
+
+    private var prompts: some View {
+        let all = chat.prompts ?? []
+        let shown = showAllPrompts ? all[...] : all.prefix(Self.promptRows)
+        // Prompts typed beyond what the CLI sends, plus those not yet shown.
+        let hidden = max(0, (chat.promptCount ?? all.count) - shown.count)
+        return VStack(alignment: .leading, spacing: 5) {
+            ForEach(Array(shown), id: \.self) { prompt in
+                HStack(alignment: .firstTextBaseline, spacing: 6) {
+                    Text(ClaudeSessionFormat.clock(prompt.at))
+                        .font(.codeMono(size: 8.5, weight: .medium))
+                        .foregroundStyle(.tertiary)
+                    Text(prompt.text)
+                        .font(.system(size: 9.5, weight: .medium))
+                        .foregroundStyle(.secondary)
+                        .lineLimit(fullPrompt == prompt ? nil : 2)
+                        .fixedSize(horizontal: false, vertical: true)
+                        .frame(maxWidth: .infinity, alignment: .leading)
+                        .help(prompt.text)
+                }
+                .contentShape(Rectangle())
+                .onTapGesture {
+                    withAnimation(.easeInOut(duration: 0.15)) { fullPrompt = fullPrompt == prompt ? nil : prompt }
+                }
+                .accessibilityElement(children: .combine)
+            }
+
+            HStack(spacing: 8) {
+                if hidden > 0 {
+                    if !showAllPrompts, all.count > shown.count {
+                        Button {
+                            withAnimation(.easeInOut(duration: 0.18)) { showAllPrompts = true }
+                        } label: {
+                            Text(L("Show %lld more", all.count - shown.count) + " ›").foregroundStyle(Theme.brandAccent)
+                        }
+                        .buttonStyle(.plain)
+                    } else {
+                        Text(L("%lld more", hidden)).foregroundStyle(.tertiary)
+                    }
+                }
+                Spacer(minLength: 4)
+                Button(action: copyResume) {
+                    HStack(spacing: 3) {
+                        Image(systemName: copied ? "checkmark" : "doc.on.doc")
+                            .font(.system(size: 8.5, weight: .semibold))
+                        Text(copied ? L("Copied") : L("Copy resume command"))
+                    }
+                    .foregroundStyle(copied ? AnyShapeStyle(.secondary) : AnyShapeStyle(Theme.brandAccent))
+                }
+                .buttonStyle(.plain)
+                .help(resumeCommand)
+            }
+            .font(.system(size: 9.5, weight: .medium))
+        }
+        .padding(.leading, 4)
+    }
+
+    /// `cd '/path' && claude --resume <id>`: Claude Code finds a chat by the
+    /// folder it ran in.
+    private var resumeCommand: String {
+        let resume = "claude --resume \(chat.sessionId)"
+        guard let path = chat.path else { return resume }
+        return "cd '\(path.replacingOccurrences(of: "'", with: "'\\''"))' && \(resume)"
+    }
+
+    private func copyResume() {
+        NSPasteboard.general.clearContents()
+        NSPasteboard.general.setString(resumeCommand, forType: .string)
+        copied = true
+        Task { @MainActor in
+            try? await Task.sleep(for: .seconds(1.5))
+            copied = false
+        }
     }
 }
 

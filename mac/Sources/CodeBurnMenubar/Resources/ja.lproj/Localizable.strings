@@ -829,3 +829,13 @@
 "Biggest sessions" = "大きいセッション";
 "Share of week" = "週に占める割合";
 "All in Sessions ›" = "すべてセッションで見る ›";
+
+/* Claude › Plan: chat rows and their prompts */
+"1 prompt" = "1件のプロンプト";
+"%lld prompts" = "%lld件のプロンプト";
+"Show %lld more" = "さらに%lld件を表示";
+"Copy resume command" = "再開コマンドをコピー";
+"Copied" = "コピーしました";
+"Shows every chat in this session" = "このセッションのすべてのチャットを表示します";
+"Shows this chat's prompts" = "このチャットのプロンプトを表示します";
+"Hides this chat's prompts" = "このチャットのプロンプトを隠します";

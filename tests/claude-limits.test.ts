@@ -313,6 +313,33 @@ describe('gaps and display values', () => {
     }))
     expect(out.current.session!.chats.map(c => [c.sessionId, c.spentUSD])).toEqual([['b', 9], ['a', 6]])
   })
+
+  it('gives each chat the prompts typed in the window, its project and its active span', () => {
+    const prompts = [
+      { at: t('2026-10-15T01:55:00Z'), chatId: 'a', text: 'before the window' },
+      ...Array.from({ length: 14 }, (_, i) => ({ at: t('2026-10-15T02:05:00Z') + i * 1000, chatId: 'a', text: `p${i}` })),
+      { at: t('2026-10-15T02:20:00Z'), chatId: 'quiet', text: 'no spend here' },
+    ]
+    const calls = [call('2026-10-15T02:10:00Z', 5, 'a'), call('2026-10-15T02:40:00Z', 1, 'a')]
+      .map(c => ({ ...c, chatProject: 'web', chatPath: '/Users/me/web' }))
+    const out = computeClaudeLimits(input({
+      now: '2026-10-15T03:00:00Z',
+      readings: [reading('2026-10-15T02:01:00Z', { five: [1, '2026-10-15T07:00:00Z'] })],
+      calls,
+      prompts,
+    }))
+    const chats = out.current.session!.chats
+    expect(chats.map(c => c.sessionId)).toEqual(['a'])
+    expect(chats[0]).toMatchObject({
+      project: 'web',
+      path: '/Users/me/web',
+      firstAt: '2026-10-15T02:10:00.000Z',
+      lastAt: '2026-10-15T02:40:00.000Z',
+      promptCount: 14,
+    })
+    expect(chats[0]!.prompts).toHaveLength(12)
+    expect(chats[0]!.prompts[0]).toEqual({ at: '2026-10-15T02:05:00.000Z', text: 'p0' })
+  })
 })
 
 // A week of well-measured sessions: each session reads its 5-hour percent and

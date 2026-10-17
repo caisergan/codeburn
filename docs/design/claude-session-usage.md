@@ -176,10 +176,16 @@ Week tiles, which repeated the row, for one line of what the row does not say,
 chosen tab is shared by every open row, so switching to Hours compares
 sessions.
 
-- **Chats**: the top three chats and `N more`, each with a bar behind it as
-  wide as its share of the session's spend. A chat's title is its own title,
-  else its project plus the start of its first prompt; subagents fold into
-  their parent.
+- **Chats**: the top three chats and `N more ›`, each with a bar behind it as
+  wide as its share of the session's spend. A chat row has two lines: its name,
+  then `project · 4 prompts · 23:13–23:53`. Clicking it lists the prompts typed
+  in this session (two lines each, the whole text on click or hover, `Show N
+  more`) and offers **Copy resume command** (`cd '<folder>' && claude --resume
+  <id>`). Subagents fold into their parent.
+- A chat is named, in order, by Monocode's name for it, its own title (a
+  `/rename`, else Claude's generated one), its first prompt, and its project.
+  Claude Code names terminal chats but not the ones Monocode runs through the
+  SDK, which is where most of those names were missing.
 - **Hours**: one bar per hour of the window with its spend, and a line for the
   5-hour percent at the end of each hour (dashed across hours with no
   reading). A running session shows the hours ahead striped, and a dashed
@@ -484,7 +490,9 @@ Session: { start, end, startInferred, spentUSD,
            weekSplit?: { thisWeek, lastWeek },
            fullSessionUSD?, fullSessionQuality,
            ranOut?: { limit, at }, outsideThisMac, unpricedModels,
-           chats: [{ sessionId, title, spentUSD }],
+           chats: [{ sessionId, title, spentUSD, project, path,
+                      firstAt, lastAt, promptCount,
+                      prompts: [{ at, text }] }],
            models: [{ model, spentUSD, tokens }],
            hours: [{ start, end, spentUSD, tokens, fiveHourPct }] }
 
@@ -504,6 +512,9 @@ Top level also has "fullWeekAverage": { "usd": 1386, "basis": 2 }.
   reading taken by its end, `null` when no reading fell inside it, and 100 from
   the slice in which the limit ran out.
 - `models` groups calls by display name ("Opus 5.5"), most expensive first.
+- A chat's `prompts` are the first 12 typed inside the window, cleaned (see
+  Implementation notes) and capped at 400 characters, with secrets masked the
+  way `codeburn why` masks them; `promptCount` counts all of them.
 - A week's `sessions` are its sessions oldest first, each with its share of
   that week; a session the week reset inside appears in both weeks with its
   part of each.
@@ -641,6 +652,24 @@ On a real machine:
   measured about 45 ms against a 30-day history of 47,000 calls.
 - **Dates inside localized lines** follow CodeBurn's display language, so an
   English UI on a Turkish-region Mac says "Wed", not "Çar".
+- **Chat names from Monocode.** `src/monocode-titles.ts` reads Monocode's
+  `sessions` table (`provider_session_id` → `title`, harness `claude`)
+  read-only through `src/sqlite.ts`, strips the `claude · ` prefix, skips chats
+  it has not named yet, and memoizes on the database's and its log's mtime. A
+  missing app or another schema gives no names, never an error.
+  `CODEBURN_MONOCODE_DB` points it elsewhere.
+- **Prompts are cleaned** of image paths, pasted-content tags, system
+  reminders and a hand-off's preamble; a slash command reads `/name args`.
+  Text the user did not type (task notifications, command output, caveats,
+  another session's message, a skill's body, "Your response above was cut
+  off") is dropped.
+- **The parser kept the wrong prompt.** Claude Code writes an `isMeta` user
+  entry after some prompts, a pasted image's path or a skill's body, and the
+  parser started a new turn on it, so the turn's prompt became
+  `[Image: source: …]`. An `isMeta` entry that arrives before Claude has
+  answered now leaves the prompt alone; turns, calls and costs are unchanged.
+  A `/rename` (`custom-title`) now wins over `ai-title`. Both needed the
+  `meta-prompts-v1` Claude parse-version bump, a one-time re-read.
 - **Past weeks are labelled `Oct 7–14`** (`Sep 30–Oct 7` across months), so
   a `RAN OUT` chip fits beside the label.
 - **No shrink-to-fit in list rows.** In the offscreen renders SwiftUI applied

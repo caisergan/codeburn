@@ -827,3 +827,13 @@
 "Biggest sessions" = "最大的会话";
 "Share of week" = "占本周比例";
 "All in Sessions ›" = "在会话中查看全部 ›";
+
+/* Claude › Plan: chat rows and their prompts */
+"1 prompt" = "1 条提示";
+"%lld prompts" = "%lld 条提示";
+"Show %lld more" = "再显示 %lld 条";
+"Copy resume command" = "复制恢复命令";
+"Copied" = "已复制";
+"Shows every chat in this session" = "显示此会话中的所有对话";
+"Shows this chat's prompts" = "显示此对话的提示";
+"Hides this chat's prompts" = "隐藏此对话的提示";

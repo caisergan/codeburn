@@ -143,10 +143,11 @@ export type CachedFile = {
   // turns, so it contributes no usage. (issue #441 follow-up)
   failed?: boolean
   // Rich-session-capture, Claude session-level.
-  // `title` is the LAST `ai-title` entry's text; `prLinks` accumulates every
-  // `pr-link` entry's URL. `isSidechain` is true when any entry is a sidechain:
-  // parentUuid references an intra-file entry uuid, not another session id, so it
-  // cannot link sessions — only the boolean marker is reliable. All optional.
+  // `title` is the last `/rename` (`custom-title`), else the LAST `ai-title`
+  // entry's text; `prLinks` accumulates every `pr-link` entry's URL.
+  // `isSidechain` is true when any entry is a sidechain: parentUuid references
+  // an intra-file entry uuid, not another session id, so it cannot link
+  // sessions — only the boolean marker is reliable. All optional.
   title?: string
   prLinks?: string[]
   isSidechain?: boolean
@@ -377,7 +378,11 @@ export const PROVIDER_PARSE_VERSIONS: Record<string, string> = {
   // queued_command prompt attachments, including classification and PR links.
   // per-call-cwd-v1: cached calls carry their cwd so a session that moved
   // folders splits across projects per call.
-  claude: 'advisor-usage-v1-skills-rich-capture-v1-cross-provider-pr-v1-session-lineage-capture-v1-queued-human-prompts-v1-per-call-cwd-v1',
+  // meta-prompts-v1: an `isMeta` entry right after a prompt (an image's path, a
+  // skill's body) no longer replaces the prompt's text, and a `/rename`
+  // (`custom-title`) beats Claude's `ai-title`. Turns, calls and costs are
+  // unchanged; cached turns need the prompt text re-read.
+  claude: 'advisor-usage-v1-skills-rich-capture-v1-cross-provider-pr-v1-session-lineage-capture-v1-queued-human-prompts-v1-per-call-cwd-v1-meta-prompts-v1',
   cline: 'worktree-project-grouping-v1',
   // reported-cost-v1: the CLI reports its own per-message cost, so entries
   // cached before cline-cli joined the reported-cost allowlist in parser.ts

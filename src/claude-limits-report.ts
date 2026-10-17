@@ -1,6 +1,7 @@
 // `codeburn limits`: Claude 5-hour sessions and weeks at API prices.
 
-import { collectLimitCalls, collectLimitEvents, readReadingLog } from './claude-limit-sources.js'
+import { collectLimitCalls, collectLimitEvents, collectLimitPrompts, readReadingLog } from './claude-limit-sources.js'
+import { readMonocodeTitles } from './monocode-titles.js'
 import { computeClaudeLimits, WEEK_LIST_COUNT, WEEK_MS, type LimitsOutput, type Quality, type SessionOut, type WeekOut } from './claude-limits.js'
 import { parseAllSessions } from './parser.js'
 import { getClaudeConfigDirs } from './providers/claude.js'
@@ -23,12 +24,16 @@ export async function buildLimitsReport(now = new Date()): Promise<LimitsOutput>
     defaultDir ? collectLimitEvents([defaultDir], since) : Promise.resolve([]),
     parseAllSessions({ start, end }, 'claude'),
   ])
+  const account = dirs.length > 1 ? defaultDir : undefined
+  // Monocode names the chats it runs; Claude Code names only terminal chats.
+  const titles = readMonocodeTitles()
   return computeClaudeLimits({
     now: now.getTime(),
     readings: log.readings.filter(r => r.at >= since),
     failures: log.failures.filter(f => f.at >= since),
     events,
-    calls: collectLimitCalls(projects, dirs.length > 1 ? defaultDir : undefined),
+    calls: collectLimitCalls(projects, account, titles),
+    prompts: collectLimitPrompts(projects, account, titles),
   })
 }
 
