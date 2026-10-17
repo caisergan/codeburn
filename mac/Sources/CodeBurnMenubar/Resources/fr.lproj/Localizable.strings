@@ -839,3 +839,7 @@
 "Shows every chat in this session" = "Affiche toutes les discussions de cette session";
 "Shows this chat's prompts" = "Affiche les prompts de cette discussion";
 "Hides this chat's prompts" = "Masque les prompts de cette discussion";
+
+/* Claude › Plan: spend a session carried past midnight into the next day */
+"%1$@ after midnight from %2$@ session" = "%1$@ après minuit, session de %2$@";
+"into %@" = "jusqu’au %@";

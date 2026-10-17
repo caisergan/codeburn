@@ -169,6 +169,31 @@ Show all 23 ›
 - `⚠︎` after the time marks a session in which a limit ran out.
 - `–` means no reading exists for that value, `≈` marks an estimate and `≥` a
   lower bound. See Display rules.
+- A day's total counts all of the sessions that started on it, also those past
+  the fold, so the rows always add up to it when the list is expanded.
+
+A session that ran past midnight stays under the day it started, so the rows
+of a day miss what that session spent after midnight, while the headline's
+Today counts the calendar day. A line under the next day's header gives that
+part, and on today the calendar total that matches the headline:
+
+```
+TODAY · SAT                                             $61
+◧ +$27 after midnight from Fri 21:10 session      $88 today
+■ 12:00–17:00 · now            $24   ▬───────  ≥23%    ≈+2%
+■ 02:10–07:10                  $37   ▬▬──────   34%     +3%
+YESTERDAY · FRI                                         $40
+■ 21:10–02:10 · into Sat       $38   ▬▬──────  ≥38%     +3%
+```
+
+- The square is the session's, outlined and filled for the part it spent after
+  midnight. Pointing at the line lights up the session's row and block;
+  clicking it opens the row. The row says `· into Sat` unless it is running.
+- The header keeps the day's own sessions, so its rows still add up to it.
+- A day no session started on still gets a header when one carried into it
+  (working past midnight without a new session), with a total of `$0`.
+- Left out under $0.50, and when the CLI's midnight is not one in the Mac's
+  time zone.
 
 Clicking a row opens it in place. The open row drops the old Spent / 5-hour /
 Week tiles, which repeated the row, for one line of what the row does not say,
@@ -494,7 +519,8 @@ Session: { start, end, startInferred, spentUSD,
                       firstAt, lastAt, promptCount,
                       prompts: [{ at, text }] }],
            models: [{ model, spentUSD, tokens }],
-           hours: [{ start, end, spentUSD, tokens, fiveHourPct }] }
+           hours: [{ start, end, spentUSD, tokens, fiveHourPct }],
+           afterMidnight?: { at, spentUSD } }
 
 Week:    { start, end, endReason, spentUSD, tokens, usedPct, usedQuality,
            fullWeekUSD?, fullWeekQuality, ranOutAt?,
@@ -511,6 +537,10 @@ Top level also has "fullWeekAverage": { "usd": 1386, "basis": 2 }.
   24-hour slices from its reset, up to now. A slice's percent is the highest
   reading taken by its end, `null` when no reading fell inside it, and 100 from
   the slice in which the limit ran out.
+- `afterMidnight` is the local midnight inside a session (in the CLI's time
+  zone, which `--timezone` sets), once it has passed, and what the session
+  spent from then to its end. A session stays inside one day otherwise; five
+  hours never hold two midnights.
 - `models` groups calls by display name ("Opus 5.5"), most expensive first.
 - A chat's `prompts` are the first 12 typed inside the window, cleaned (see
   Implementation notes) and capped at 400 characters, with secrets masked the
@@ -595,6 +625,8 @@ CLI (vitest, with fixture reading logs and transcripts):
 - Closure: across a closed week, the per-session week shares sum to the week's
   final percent within ±2 points.
 - Hourly: local-hour buckets, and daylight-saving days with 23 and 25 hours.
+- Days: a session across local midnight gets what it spent after it; one
+  inside a day, or running before its midnight, gets none.
 
 Menu bar (XCTest):
 
@@ -606,6 +638,8 @@ Menu bar (XCTest):
   35-day pruning, and the one-time import of `subscription-snapshots.json`.
 - `SubscriptionSnapshotStore`: normalized keys; a failed load never overwrites
   the file.
+- Days: a carry-over goes under the next day, also a day with no session of
+  its own; one from another time zone or under $0.50 is left out.
 - Localization coverage and catalog tests pass for all new strings in all six
   locales, and the new rows fit 360 points in the longest locale.
 
