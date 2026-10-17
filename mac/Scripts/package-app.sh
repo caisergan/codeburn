@@ -6,6 +6,9 @@
 #   mac/Scripts/package-app.sh [<version>]
 # Defaults to `dev` if no version is given.
 #
+# ARCHS picks the slices, `arm64 x86_64` (universal) by default; a local install
+# on Apple Silicon can pass ARCHS=arm64 to compile once instead of twice.
+#
 # Release builds set CODESIGN_IDENTITY (Developer ID Application) plus NOTARY_KEY_PATH,
 # NOTARY_KEY_ID and NOTARY_ISSUER_ID (App Store Connect API key) to notarize and staple
 # the app before it is zipped.
@@ -35,10 +38,14 @@ echo "▸ Cleaning previous dist..."
 rm -rf "${DIST_DIR}"
 mkdir -p "${DIST_DIR}"
 
-echo "▸ Building universal binary (arm64 + x86_64)..."
-swift build -c release --arch arm64 --arch x86_64
+read -r -a ARCH_LIST <<< "${ARCHS:-arm64 x86_64}"
+ARCH_ARGS=()
+for arch in "${ARCH_LIST[@]}"; do ARCH_ARGS+=(--arch "${arch}"); done
 
-BIN_PATH=$(swift build -c release --arch arm64 --arch x86_64 --show-bin-path)
+echo "▸ Building binary (${ARCH_LIST[*]})..."
+swift build -c release "${ARCH_ARGS[@]}"
+
+BIN_PATH=$(swift build -c release "${ARCH_ARGS[@]}" --show-bin-path)
 BUILT_BINARY="${BIN_PATH}/${EXECUTABLE_NAME}"
 if [[ ! -x "${BUILT_BINARY}" ]]; then
   echo "Binary not found at ${BUILT_BINARY}" >&2

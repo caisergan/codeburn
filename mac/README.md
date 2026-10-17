@@ -78,6 +78,24 @@ clean), producing a `minos = 14.0` bundle installed to `~/Applications`:
 mac/Scripts/build-local.sh         # then: codeburn menubar
 ```
 
+## Install your own build (CLI and app)
+
+To run this repository's CLI and app day to day, for example after merging a
+PR into a fork:
+
+```bash
+scripts/install-local.sh            # pull dev, build, install both, relaunch
+scripts/install-local.sh --current  # build the checkout as it is, uncommitted changes too
+scripts/install-local.sh --dry-run  # show what it would do
+```
+
+It installs the CLI into the Node install the app already runs it from (the
+path `codeburn menubar` records), builds the app with `Scripts/package-app.sh`
+for this Mac's architecture, signs it with your first "Apple Development"
+identity when there is one (so macOS keeps its permission grants across
+rebuilds; `CODESIGN_IDENTITY=-` signs ad hoc), replaces the installed bundle and
+relaunches it. `--help` lists the other options.
+
 ## Build & run (dev against a local CLI checkout)
 
 ```bash
