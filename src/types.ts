@@ -84,6 +84,9 @@ export type JournalEntry = {
   promptId?: string
   message?: AssistantMessageContent | { role: 'user'; content: string | ContentBlock[] }
   isSidechain?: boolean
+  /// Written by Claude Code itself, not typed: an image's path, a skill's body,
+  /// a local command's caveat, another session's message.
+  isMeta?: boolean
   [key: string]: unknown
 }
 

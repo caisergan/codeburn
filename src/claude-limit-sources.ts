@@ -9,8 +9,9 @@ import { randomBytes } from 'crypto'
 import { join, resolve } from 'path'
 
 import { getCodeburnCacheDir } from './cache-dir.js'
-import type { FailedCheck, LimitCall, LimitEvent, LimitName, LimitReading } from './claude-limits.js'
+import type { FailedCheck, LimitCall, LimitEvent, LimitName, LimitPrompt, LimitReading } from './claude-limits.js'
 import { findUnpricedModels, getShortModelName } from './models.js'
+import { redact } from './session-why.js'
 import type { ProjectSummary } from './types.js'
 
 export const READING_LOG_FILE = 'claude-limit-readings.jsonl'
@@ -269,6 +270,9 @@ async function scanLimitEvents(claudeDirs: string[], sinceMs: number, cacheDir: 
 // ---------------------------------------------------------------------------
 
 const MAX_TITLE = 80
+/// A prompt as the Plan view shows it: enough to recognise, short enough that
+/// a pasted log does not swell the report.
+const MAX_PROMPT = 400
 
 function clean(text: string): string {
   return text.replace(/[\x00-\x1F\x7F-\x9F]/g, ' ').replace(/\s+/g, ' ').trim()
@@ -279,22 +283,74 @@ function projectLabel(path: string, fallback: string): string {
   return segments.at(-1) ?? fallback
 }
 
-// A resident serve process hands back the same memoized ProjectSummary array
-// while the session roots are quiet, so the flattening is memoized on it too.
-const callsMemo = new WeakMap<ProjectSummary[], { dir: string | undefined; calls: LimitCall[] }>()
+/// Text Claude Code or another agent wrote into the user's side of a chat:
+/// notifications, command output, caveats, hand-backs, skill bodies.
+const MACHINE_PROMPT = /^\s*(?:<(?:task-notification|local-command-stdout|local-command-stderr|local-command-caveat|system-reminder|bash-input|bash-stdout|bash-stderr)\b|Caveat: The messages below|\[Request interrupted by user|Another Claude session sent a message|This session is being continued from a previous conversation|Base directory for this skill:|Your response above was cut off)/
+/// A conversation handed over from another tool: the request is the paragraph
+/// after this line, before the prior conversation is quoted.
+const HANDOFF = /^\s*You are continuing an existing conversation handed off from[^\n]*\n/
+const HANDOFF_PRIOR = /\n\s*Prior conversation from /
 
-/// Every priced Claude call, with the chat it belongs to. Subagents fold into
-/// their parent chat. A chat's title is its own title, else its project plus
-/// the start of its first prompt.
-export function collectLimitCalls(projects: ProjectSummary[], defaultClaudeDir?: string): LimitCall[] {
-  const memo = callsMemo.get(projects)
-  if (memo && memo.dir === defaultClaudeDir) return memo.calls
-  const calls = flattenLimitCalls(projects, defaultClaudeDir)
-  callsMemo.set(projects, { dir: defaultClaudeDir, calls })
-  return calls
+/// What the user asked, without what tools wrapped around it: image paths,
+/// pasted-content tags, system reminders, a hand-off's preamble; a slash
+/// command reads `/name args`. Empty for text the user did not type.
+export function cleanPrompt(raw: string): string {
+  if (MACHINE_PROMPT.test(raw)) return ''
+  let text = raw
+  const handoff = HANDOFF.exec(text)
+  if (handoff) {
+    text = text.slice(handoff[0].length)
+    const prior = text.search(HANDOFF_PRIOR)
+    if (prior >= 0) text = text.slice(0, prior)
+  }
+  const command = /<command-name>\s*\/?([^<\s]+)\s*<\/command-name>/.exec(text)
+  if (command) {
+    const args = /<command-args>([\s\S]*?)<\/command-args>/.exec(text)?.[1] ?? ''
+    text = `/${command[1]} ${args}`
+  }
+  text = text
+    .replace(/<system-reminder>[\s\S]*?<\/system-reminder>/g, ' ')
+    .replace(/\[Image(?::[^\]]*| #\d+)\]/g, ' ')
+    .replace(/<\/?pasted_content\b[^>]*>/g, ' ')
+  return clean(redact(text))
 }
 
-function flattenLimitCalls(projects: ProjectSummary[], defaultClaudeDir?: string): LimitCall[] {
+function cap(text: string, max: number): string {
+  const chars = Array.from(text)
+  return chars.length > max ? `${chars.slice(0, max - 1).join('').trimEnd()}…` : text
+}
+
+// A resident serve process hands back the same memoized ProjectSummary array
+// while the session roots are quiet, so the flattening is memoized on it too.
+type Flattened = { calls: LimitCall[]; prompts: LimitPrompt[] }
+const callsMemo = new WeakMap<ProjectSummary[], { dir: string | undefined; titles: ReadonlyMap<string, string>; out: Flattened }>()
+const NO_TITLES: ReadonlyMap<string, string> = new Map()
+
+/// Every priced Claude call, with the chat it belongs to. Subagents fold into
+/// their parent chat. A chat is named, in order, by `titles` (Monocode's name
+/// for it), its own title (a `/rename`, else Claude's), the start of its first
+/// prompt, and its project.
+export function collectLimitCalls(projects: ProjectSummary[], defaultClaudeDir?: string, titles: ReadonlyMap<string, string> = NO_TITLES): LimitCall[] {
+  return flatten(projects, defaultClaudeDir, titles).calls
+}
+
+/// The prompts the user typed in each chat, oldest first, for the session
+/// rows to show what a chat was doing.
+export function collectLimitPrompts(projects: ProjectSummary[], defaultClaudeDir?: string, titles: ReadonlyMap<string, string> = NO_TITLES): LimitPrompt[] {
+  return flatten(projects, defaultClaudeDir, titles).prompts
+}
+
+function flatten(projects: ProjectSummary[], defaultClaudeDir: string | undefined, titles: ReadonlyMap<string, string>): Flattened {
+  const memo = callsMemo.get(projects)
+  if (memo && memo.dir === defaultClaudeDir && memo.titles === titles) return memo.out
+  const out = flattenLimitCalls(projects, defaultClaudeDir, titles)
+  callsMemo.set(projects, { dir: defaultClaudeDir, titles, out })
+  return out
+}
+
+type ChatName = { title: string; project: string; path: string }
+
+function flattenLimitCalls(projects: ProjectSummary[], defaultClaudeDir: string | undefined, titles: ReadonlyMap<string, string>): Flattened {
   const unpricedMemo = new Map<string, boolean>()
   const isUnpriced = (model: string, cost: number): boolean => {
     if (cost > 0) return false
@@ -306,28 +362,39 @@ function flattenLimitCalls(projects: ProjectSummary[], defaultClaudeDir?: string
     return unpriced
   }
 
-  const titles = new Map<string, string>()
+  const defaultDir = defaultClaudeDir ? resolve(defaultClaudeDir) : undefined
+  // V1 follows the default account: sessions from another configured Claude
+  // directory belong to readings this Mac does not take.
+  const included = (session: ProjectSummary['sessions'][number]): boolean =>
+    !(defaultDir && session.source?.kind === 'claude-config' && resolve(session.source.path) !== defaultDir)
+
+  const names = new Map<string, ChatName>()
+  const prompts: LimitPrompt[] = []
   for (const project of projects) {
     for (const session of project.sessions) {
-      if (session.isSidechain) continue
-      const own = session.title ? clean(session.title) : ''
-      const first = session.turns.find(t => t.userMessage && t.userMessage.trim())?.userMessage ?? ''
+      if (session.isSidechain || !included(session)) continue
       const label = projectLabel(project.projectPath, session.project || project.project)
-      const title = own || (first ? `${label} · “${clean(first)}”` : label)
-      titles.set(session.sessionId, Array.from(title).slice(0, MAX_TITLE).join(''))
+      let first = ''
+      for (const turn of session.turns) {
+        const text = turn.userMessage ? cleanPrompt(turn.userMessage) : ''
+        if (!text) continue
+        if (!first) first = text
+        const at = Date.parse(turn.timestamp)
+        if (Number.isFinite(at)) prompts.push({ at, chatId: session.sessionId, text: cap(text, MAX_PROMPT) })
+      }
+      const own = titles.get(session.sessionId) ?? (session.title ? clean(session.title) : '')
+      names.set(session.sessionId, { title: cap(own || first || label, MAX_TITLE), project: label, path: project.projectPath })
     }
   }
 
   const out: LimitCall[] = []
-  const defaultDir = defaultClaudeDir ? resolve(defaultClaudeDir) : undefined
   for (const project of projects) {
     for (const session of project.sessions) {
-      // V1 follows the default account: sessions from another configured
-      // Claude directory belong to readings this Mac does not take.
-      if (defaultDir && session.source?.kind === 'claude-config' && resolve(session.source.path) !== defaultDir) continue
+      if (!included(session)) continue
       const chatId = session.parentSessionId ?? session.sessionId
-      const chatTitle = titles.get(chatId) ?? titles.get(session.sessionId)
-        ?? projectLabel(project.projectPath, session.project || project.project)
+      const label = projectLabel(project.projectPath, session.project || project.project)
+      const name = names.get(chatId) ?? names.get(session.sessionId)
+        ?? { title: titles.get(chatId) ?? label, project: label, path: project.projectPath }
       for (const turn of session.turns) {
         for (const call of turn.assistantCalls) {
           const at = Date.parse(call.timestamp)
@@ -346,11 +413,14 @@ function flattenLimitCalls(projects: ProjectSummary[], defaultClaudeDir?: string
             modelName: getShortModelName(call.model),
             unpriced: isUnpriced(call.model, call.costUSD),
             chatId,
-            chatTitle,
+            chatTitle: name.title,
+            chatProject: name.project,
+            chatPath: name.path,
           })
         }
       }
     }
   }
-  return out
+  prompts.sort((a, b) => a.at - b.at)
+  return { calls: out, prompts }
 }

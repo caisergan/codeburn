@@ -672,7 +672,7 @@ function extractObjectFields(
   return captured
 }
 
-const LARGE_ROOT_FIELDS = ['type', 'timestamp', 'sessionId', 'cwd', 'gitBranch', 'attachment', 'message', 'isSidechain', 'promptSource'] as const
+const LARGE_ROOT_FIELDS = ['type', 'timestamp', 'sessionId', 'cwd', 'gitBranch', 'attachment', 'message', 'isSidechain', 'isMeta', 'promptSource'] as const
 const LARGE_ASSISTANT_MESSAGE_FIELDS = ['model', 'usage', 'id', 'content'] as const
 
 function parseLargeJsonl(line: string | Buffer): JournalEntry | null {
@@ -688,6 +688,9 @@ function parseLargeJsonl(line: string | Buffer): JournalEntry | null {
   const entry: JournalEntry = { type }
   if (root['isSidechain']?.kind === 'scalar' && source.slice(root['isSidechain'].start, root['isSidechain'].end) === 'true') {
     entry.isSidechain = true
+  }
+  if (root['isMeta']?.kind === 'scalar' && source.slice(root['isMeta'].start, root['isMeta'].end) === 'true') {
+    entry.isMeta = true
   }
   const timestamp = readJsonString(source, root['timestamp'])
   const sessionId = readJsonString(source, root['sessionId'])
@@ -1085,6 +1088,9 @@ export function compactEntry(raw: JournalEntry): JournalEntry {
   if (raw.cwd !== undefined) entry.cwd = raw.cwd
   // Preserved so groupIntoTurns can stamp each turn's git branch (rich capture).
   if (typeof raw.gitBranch === 'string' && raw.gitBranch) entry.gitBranch = raw.gitBranch
+  // Preserved so groupIntoTurns can keep a prompt's own text over the
+  // harness-written entries that follow it (an image's path, a skill's body).
+  if (raw.isMeta === true) entry.isMeta = true
   // Preserved so groupIntoTurns can attribute each PR reference to its turn.
   // Only `pr-link` entries carry `prUrl`; every other field of theirs is dropped.
   if (raw.type === 'pr-link') {
@@ -1359,12 +1365,16 @@ export type ToolResultMeta = {
   isError: boolean
 }
 
-// Session-level accumulator: last `ai-title` wins, `pr-link` URLs accumulate,
-// and any sidechain entry flips `isSidechain`. parentUuid is deliberately not
+// Session-level accumulator: the last `/rename` (`custom-title`) wins, else
+// the last `ai-title`; `pr-link` URLs accumulate, and any sidechain entry
+// flips `isSidechain`. parentUuid is deliberately not
 // captured as a session link — it references an intra-file entry uuid, not
 // another session's id, so it cannot reliably connect two sessions.
 export type SessionMeta = {
   title?: string
+  /// The title came from a `/rename` (`custom-title`), so Claude's own
+  /// `ai-title` no longer replaces it.
+  renamed?: boolean
   prLinks: string[]
   isSidechain: boolean
   // Sidechain side: the parent session id (a sidechain entry's internal
@@ -1432,9 +1442,15 @@ export function collectToolResultMeta(entry: JournalEntry, map: Map<string, Tool
 // (Claude refines the title over the session); `pr-link` URLs union; any
 // sidechain entry marks the session.
 export function collectSessionMeta(entry: JournalEntry, meta: SessionMeta): void {
-  if (entry.type === 'ai-title') {
+  if (entry.type === 'custom-title') {
+    const t = (entry as Record<string, unknown>)['customTitle']
+    if (typeof t === 'string' && t.trim()) {
+      meta.title = flatString(t.trim().slice(0, 200))
+      meta.renamed = true
+    }
+  } else if (entry.type === 'ai-title') {
     const t = (entry as Record<string, unknown>)['aiTitle']
-    if (typeof t === 'string' && t.trim()) meta.title = flatString(t.trim().slice(0, 200))
+    if (typeof t === 'string' && t.trim() && !meta.renamed) meta.title = flatString(t.trim().slice(0, 200))
   } else if (entry.type === 'pr-link') {
     const url = (entry as Record<string, unknown>)['prUrl']
     if (typeof url === 'string' && url && !meta.prLinks.includes(url)) meta.prLinks.push(url)
@@ -1716,7 +1732,12 @@ export function groupIntoTurns(entries: JournalEntry[], seenMsgIds: Set<string>,
     const entryBranch = typeof entry.gitBranch === 'string' && entry.gitBranch ? entry.gitBranch : undefined
     if (entry.type === 'user') {
       const text = getUserMessageText(entry)
-      if (text.trim()) {
+      // Claude Code writes an `isMeta` user entry after some prompts: a pasted
+      // image's path, a skill's body. Before Claude has answered, it belongs
+      // to the prompt in hand; starting a new turn on it replaced the text the
+      // user typed with "[Image: source: …]".
+      const followsPrompt = entry.isMeta === true && currentCalls.length === 0 && currentUserMessage.trim() !== ''
+      if (text.trim() && !followsPrompt) {
         pushCurrentTurn()
         currentUserMessage = text
         currentCalls = []

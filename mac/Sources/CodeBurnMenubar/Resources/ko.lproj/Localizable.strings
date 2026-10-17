@@ -829,3 +829,13 @@
 "Biggest sessions" = "가장 큰 세션";
 "Share of week" = "주간 비중";
 "All in Sessions ›" = "세션에서 모두 보기 ›";
+
+/* Claude › Plan: chat rows and their prompts */
+"1 prompt" = "프롬프트 1개";
+"%lld prompts" = "프롬프트 %lld개";
+"Show %lld more" = "%lld개 더 보기";
+"Copy resume command" = "재개 명령 복사";
+"Copied" = "복사됨";
+"Shows every chat in this session" = "이 세션의 모든 채팅을 표시합니다";
+"Shows this chat's prompts" = "이 채팅의 프롬프트를 표시합니다";
+"Hides this chat's prompts" = "이 채팅의 프롬프트를 숨깁니다";

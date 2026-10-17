@@ -43,10 +43,23 @@ struct ClaudeLimitsReport: Decodable, Equatable, Sendable {
         var total: Double { input + output + cacheRead + cacheWrite }
     }
 
+    struct Prompt: Decodable, Equatable, Sendable, Hashable {
+        let at: Date
+        let text: String
+    }
+
     struct Chat: Decodable, Equatable, Sendable, Identifiable {
         let sessionId: String
         let title: String
         let spentUSD: Double
+        /// Missing from CLIs older than the chat prompts.
+        let project: String?
+        let path: String?
+        let firstAt: Date?
+        let lastAt: Date?
+        let promptCount: Int?
+        /// The first prompts typed in this session; `promptCount` counts all.
+        let prompts: [Prompt]?
         var id: String { sessionId }
     }
 

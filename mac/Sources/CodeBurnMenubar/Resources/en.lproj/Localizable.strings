@@ -836,3 +836,13 @@
 "Biggest sessions" = "Biggest sessions";
 "Share of week" = "Share of week";
 "All in Sessions ›" = "All in Sessions ›";
+
+/* Claude › Plan: chat rows and their prompts */
+"1 prompt" = "1 prompt";
+"%lld prompts" = "%lld prompts";
+"Show %lld more" = "Show %lld more";
+"Copy resume command" = "Copy resume command";
+"Copied" = "Copied";
+"Shows every chat in this session" = "Shows every chat in this session";
+"Shows this chat's prompts" = "Shows this chat's prompts";
+"Hides this chat's prompts" = "Hides this chat's prompts";
