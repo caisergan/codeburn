@@ -846,3 +846,7 @@
 "Shows every chat in this session" = "Shows every chat in this session";
 "Shows this chat's prompts" = "Shows this chat's prompts";
 "Hides this chat's prompts" = "Hides this chat's prompts";
+
+/* Claude › Plan: spend a session carried past midnight into the next day */
+"%1$@ after midnight from %2$@ session" = "%1$@ after midnight from %2$@ session";
+"into %@" = "into %@";

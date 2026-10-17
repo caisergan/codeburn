@@ -638,8 +638,10 @@ struct ClaudeSessionsList: View {
 
     var body: some View {
         let sessions = report.sessions
-        let shown = showAll ? sessions : Array(sessions.prefix(Self.collapsedCount))
+        let shown = Set((showAll ? sessions : Array(sessions.prefix(Self.collapsedCount))).map(\.id))
         let resets = weekResets(in: sessions)
+        let days = ClaudeSessionDay.days(sessions)
+        let carried = Set(days.compactMap { $0.carryOver?.session.id })
 
         VStack(alignment: .leading, spacing: 0) {
             if report.current.week != nil {
@@ -647,12 +649,7 @@ struct ClaudeSessionsList: View {
                     blocks: stripBlocks,
                     fullSessionShare: report.fullSessionWeekShare,
                     highlighted: $highlighted,
-                    select: { id in
-                        withAnimation(.spring(response: 0.3, dampingFraction: 0.85)) {
-                            if !shown.contains(where: { $0.id == id }) { showAll = true }
-                            expanded = id
-                        }
-                    }
+                    select: { open($0, shown: shown) }
                 )
             }
             HStack(spacing: 4) {
@@ -683,11 +680,23 @@ struct ClaudeSessionsList: View {
                     .padding(.vertical, 4)
             }
 
-            ForEach(dayGroups(shown), id: \.day) { group in
-                DayHeader(day: group.day, total: group.sessions.reduce(0) { $0 + $1.spentUSD }, unpriced: group.sessions.contains { !$0.unpricedModels.isEmpty })
+            // A day's total counts all of its sessions, also those past the fold.
+            ForEach(days.filter { isShown($0, shown: shown) }, id: \.day) { day in
+                DayHeader(day: day.day, total: day.spentUSD, unpriced: day.unpriced)
                     .padding(.top, 8)
                     .padding(.bottom, 2)
-                ForEach(group.sessions) { session in
+                if let carry = day.carryOver {
+                    CarryOverLine(
+                        carry: carry,
+                        todayTotal: Calendar.current.isDateInToday(day.day) ? day.spentUSD + carry.spentUSD : nil,
+                        unpriced: day.unpriced || !carry.session.unpricedModels.isEmpty,
+                        isHighlighted: highlighted == carry.session.id,
+                        hover: { hover(carry.session.id, inside: $0) },
+                        open: { open(carry.session.id, shown: shown) }
+                    )
+                    .padding(.bottom, 1)
+                }
+                ForEach(day.sessions.filter { shown.contains($0.id) }) { session in
                     if let reset = resets[session.id] {
                         WeekResetDivider(resetAt: reset)
                     }
@@ -695,15 +704,14 @@ struct ClaudeSessionsList: View {
                         session: session,
                         isOpen: expanded == session.id,
                         isHighlighted: highlighted == session.id,
-                        hover: { inside in
-                            if inside { highlighted = session.id } else if highlighted == session.id { highlighted = nil }
-                        },
+                        hover: { hover(session.id, inside: $0) },
                         toggle: {
                             withAnimation(.spring(response: 0.3, dampingFraction: 0.85)) {
                                 expanded = expanded == session.id ? nil : session.id
                             }
                         },
                         tab: $tab,
+                        carriesInto: carried.contains(session.id) ? session.afterMidnight?.at : nil,
                         openChat: openChat
                     )
                 }
@@ -749,24 +757,24 @@ struct ClaudeSessionsList: View {
         }
     }
 
-    private struct DayGroup {
-        let day: Date
-        let sessions: [ClaudeLimitsReport.Session]
+    /// A day shows when one of its rows does, or, with no rows of its own,
+    /// when the session it carries over from does.
+    private func isShown(_ day: ClaudeSessionDay, shown: Set<String>) -> Bool {
+        if day.sessions.contains(where: { shown.contains($0.id) }) { return true }
+        guard day.sessions.isEmpty, let carry = day.carryOver else { return false }
+        return shown.contains(carry.session.id)
     }
 
-    /// Sessions by the local day they started, newest first like the list.
-    private func dayGroups(_ sessions: [ClaudeLimitsReport.Session]) -> [DayGroup] {
-        let calendar = Calendar.current
-        var groups: [DayGroup] = []
-        for session in sessions {
-            let day = calendar.startOfDay(for: session.start)
-            if let last = groups.last, last.day == day {
-                groups[groups.count - 1] = DayGroup(day: day, sessions: last.sessions + [session])
-            } else {
-                groups.append(DayGroup(day: day, sessions: [session]))
-            }
+    /// Opens a session's row, expanding the list when it is past the fold.
+    private func open(_ id: String, shown: Set<String>) {
+        withAnimation(.spring(response: 0.3, dampingFraction: 0.85)) {
+            if !shown.contains(id) { showAll = true }
+            expanded = id
         }
-        return groups
+    }
+
+    private func hover(_ id: String, inside: Bool) {
+        if inside { highlighted = id } else if highlighted == id { highlighted = nil }
     }
 
     /// The weekly resets inside the list, keyed by the id of the row the
@@ -864,6 +872,84 @@ private struct DayHeader: View {
     }
 }
 
+/// "◧ +$27 after midnight from Fri 21:10 session        $88 today" under a
+/// day header: the part of a session from the day before spent after this
+/// day's midnight. The square is that session's, filled for the part spent
+/// after midnight. Pointing at the line lights up the session; clicking
+/// opens it.
+private struct CarryOverLine: View {
+    let carry: ClaudeSessionDay.CarryOver
+    /// The day's rows plus the carry-over, on today only, where it matches the
+    /// headline.
+    let todayTotal: Double?
+    let unpriced: Bool
+    let isHighlighted: Bool
+    let hover: (Bool) -> Void
+    let open: () -> Void
+
+    var body: some View {
+        Button(action: open) {
+            HStack(spacing: 4) {
+                CarryOverSquare(share: carry.share, color: carry.session.running ? Theme.brandAccentLight : Theme.brandAccent)
+                    .padding(.trailing, 3)
+                Text(text)
+                    .lineLimit(1)
+                Spacer(minLength: 4)
+                if let total {
+                    Text(total)
+                        .font(.codeMono(size: 9.5, weight: .semibold))
+                        .foregroundStyle(.secondary)
+                        .fixedSize()
+                }
+            }
+            .font(.system(size: 9.5, weight: .medium))
+            .foregroundStyle(.tertiary)
+            .padding(.horizontal, Columns.bleed)
+            .padding(.vertical, 2)
+            .background(RoundedRectangle(cornerRadius: 5).fill(Color.primary.opacity(isHighlighted ? 0.05 : 0)))
+            .contentShape(Rectangle())
+        }
+        .buttonStyle(.plain)
+        .onHover(perform: hover)
+        .padding(.horizontal, -Columns.bleed)
+        .accessibilityLabel([String(text.characters), total].compactMap { $0 }.joined(separator: ", "))
+        .accessibilityHint(L("Shows session details"))
+    }
+
+    private var amount: String { "+" + money(carry.spentUSD) }
+
+    private var total: String? {
+        todayTotal.map { L("%@ today", money($0, unpriced: unpriced)) }
+    }
+
+    /// The amount stands out in the row's mono figures.
+    private var text: AttributedString {
+        let start = ClaudeSessionFormat.weekdayClock(carry.session.start)
+        let source = carry.session.startInferred ? "≈ \(start)" : start
+        var out = AttributedString(L("%1$@ after midnight from %2$@ session", amount, source))
+        if let range = out.range(of: amount) {
+            out[range].font = .codeMono(size: 9.5, weight: .semibold)
+            out[range].foregroundColor = .secondary
+        }
+        return out
+    }
+}
+
+/// A session's square, outlined and filled from the right for `share`.
+private struct CarryOverSquare: View {
+    let share: Double
+    let color: Color
+
+    var body: some View {
+        Rectangle()
+            .fill(color)
+            .frame(width: 8 * share)
+            .frame(width: 8, height: 8, alignment: .trailing)
+            .overlay(RoundedRectangle(cornerRadius: 2).strokeBorder(color, lineWidth: 1.25))
+            .clipShape(RoundedRectangle(cornerRadius: 2))
+    }
+}
+
 private struct WeekResetDivider: View {
     let resetAt: Date
 
@@ -888,6 +974,8 @@ private struct ClaudeSessionRow: View {
     let hover: (Bool) -> Void
     let toggle: () -> Void
     @Binding var tab: ClaudeSessionDetailTab
+    /// The next day, when the list shows what this session spent in it.
+    var carriesInto: Date? = nil
     var openChat: String? = nil
 
     var body: some View {
@@ -911,6 +999,10 @@ private struct ClaudeSessionRow: View {
                             Text(" · " + L("now"))
                                 .font(.system(size: 9.5, weight: .semibold))
                                 .foregroundStyle(Theme.brandAccentLight)
+                        } else if let carriesInto {
+                            Text(" · " + L("into %@", ClaudeSessionFormat.weekday(carriesInto)))
+                                .font(.system(size: 9.5, weight: .medium))
+                                .foregroundStyle(.tertiary)
                         }
                         if session.ranOut != nil {
                             Text(" " + ClaudeSessionFormat.ranOutMark)
@@ -977,6 +1069,7 @@ private struct ClaudeSessionRow: View {
             L("Week used %1$@, %2$@", ClaudeSessionFormat.percent(session.weekPct, session.weekQuality, signed: true), session.weekQuality.spoken),
         ]
         if session.ranOut != nil { parts.append(L("a limit ran out")) }
+        if let carriesInto, !session.running { parts.append(L("into %@", ClaudeSessionFormat.weekday(carriesInto))) }
         parts.append(isOpen ? L("Expanded") : L("Collapsed"))
         return parts.joined(separator: ", ")
     }

@@ -142,6 +142,10 @@ export type SessionOut = {
   chats: ChatShare[]
   models: ModelShare[]
   hours: HourOut[]
+  /// The local midnight inside the session, once it has passed, and what the
+  /// session spent after it: the menubar lists a session under the day it
+  /// started, so this part belongs to the next day's total.
+  afterMidnight?: { at: string; spentUSD: number }
   gap?: Gap
 }
 
@@ -646,6 +650,10 @@ export function computeClaudeLimits(input: LimitsInput): LimitsOutput {
       now,
       ranOutEvent?.at ?? null,
     ).map(h => ({ start: iso(h.start), end: iso(h.end), spentUSD: h.spentUSD, tokens: h.tokens, fiveHourPct: h.pct }))
+    const midnight = nextLocalMidnight(window.start)
+    const afterMidnight = midnight < window.end && midnight <= now
+      ? { at: iso(midnight), spentUSD: spendIn(calls, midnight, window.end).spentUSD }
+      : undefined
 
     const out: SessionOut = {
       id: iso(window.key),
@@ -669,6 +677,7 @@ export function computeClaudeLimits(input: LimitsInput): LimitsOutput {
       chats: chatsIn(calls, prompts, window.start, window.end),
       models: modelsIn(calls, window.start, window.end),
       hours,
+      ...(afterMidnight ? { afterMidnight } : {}),
     }
     const gap = gapFor(gaps, window, sessionReadings.length > 0, fiveHourQuality, weekQuality)
     if (gap) out.gap = gap
@@ -962,6 +971,13 @@ function prevBefore(sorted: number[], at: number): number | null {
 function weekBoundaryBetween(weeks: WeekWindow[], from: number, to: number): number | null {
   for (const w of weeks) if (w.end > from && w.end <= to) return w.end
   return null
+}
+
+/// The first local midnight after `ms`, in the process's time zone (which
+/// `--timezone` sets).
+function nextLocalMidnight(ms: number): number {
+  const d = new Date(ms)
+  return new Date(d.getFullYear(), d.getMonth(), d.getDate() + 1).getTime()
 }
 
 function round1(n: number): number {

@@ -64,8 +64,12 @@ struct ClaudeSessionsLayoutTests {
             ClaudeWeeksList(report: report, expanded: report.weeks[0].start, tab: .sessions).environment(store)
         )
         let row = try render("all-tab", ClaudeSessionAllTabRow(report: report).environment(store))
+        // The oldest session ran past midnight into the next day's group.
+        let midnight = Calendar.current.startOfDay(for: report.sessions[1].start)
+        let carried = try ClaudeLimitsFixture.report(afterMidnight: ISO8601DateFormatter().string(from: midnight), spentUSD: 120)
+        let carryOver = try render("sessions-carry-over", ClaudeSessionsList(report: carried).environment(store))
         // The renders keep the popover width: nothing pushes the content wider.
-        for size in [sessions, hours, models, chats, weeks, weekDays, weekSessions, row] {
+        for size in [sessions, hours, models, chats, weeks, weekDays, weekSessions, row, carryOver] {
             #expect(size.width == Self.contentWidth + 28)
         }
         // The All-tab row stays one line (28pt of it is the render padding).
@@ -111,6 +115,22 @@ struct ClaudeSessionsLayoutTests {
         let valueWidth = value.size(withAttributes: [.font: NSFont.monospacedSystemFont(ofSize: 10.5, weight: .semibold)]).width
             + width("%1$@ · %2$@ · %3$@ of week", 10.5, .semibold) - width("%1$@ · %2$@ · %3$@", 10.5, .semibold)
         #expect(width("Claude session", 11, .medium) + valueWidth * 0.85 + 6 + 6 + 10 <= 360 - 28)
+        // The carry-over line under a day header fits one line with today's
+        // total: the square, the text, the total.
+        func filled(_ key: String, _ values: [String: String]) -> String {
+            values.reduce(L10n.lookup(key, in: bundle)) { $0.replacingOccurrences(of: $1.key, with: $1.value) }
+        }
+        func measure(_ text: String, _ font: NSFont) -> CGFloat {
+            (text as NSString).size(withAttributes: [.font: font]).width
+        }
+        let carry = measure(filled("%1$@ after midnight from %2$@ session", ["%1$@": "+$127", "%2$@": "Wed 21:10"]), .systemFont(ofSize: 9.5, weight: .medium))
+        let today = measure(filled("%@ today", ["%@": "$1,288"]), .monospacedSystemFont(ofSize: 9.5, weight: .semibold))
+        #expect(8 + 3 + 4 + carry + 4 + today <= Self.contentWidth)
+        // A row's time and "· into Thu" leave room for its figures: the
+        // square, Spent 40, the 5-hour meter and percent 80, Week 34.
+        let range = measure("21:10–02:10", .systemFont(ofSize: 10.5, weight: .medium))
+        let into = measure(" · " + filled("into %@", ["%@": "Thu"]), .systemFont(ofSize: 9.5, weight: .medium))
+        #expect(8 + 3 + 4 + range + into + 4 + 40 + 80 + 34 + 4 * 4 <= Self.contentWidth)
     }
 
     /// The whole insight section as the popover shows it: Claude › Plan with

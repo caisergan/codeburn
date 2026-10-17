@@ -138,6 +138,12 @@ struct ClaudeLimitsReport: Decodable, Equatable, Sendable {
         let resetAt: Date
     }
 
+    /// The local midnight inside a session and what it spent after it.
+    struct AfterMidnight: Decodable, Equatable, Sendable {
+        let at: Date
+        let spentUSD: Double
+    }
+
     struct Session: Decodable, Equatable, Sendable, Identifiable {
         let id: String
         let start: Date
@@ -163,6 +169,8 @@ struct ClaudeLimitsReport: Decodable, Equatable, Sendable {
         /// Missing from CLIs older than the tabbed detail.
         let models: [Model]?
         let hours: [Slice]?
+        /// Missing when the session stays inside one day, and from older CLIs.
+        let afterMidnight: AfterMidnight?
     }
 
     struct Week: Decodable, Equatable, Sendable, Identifiable {

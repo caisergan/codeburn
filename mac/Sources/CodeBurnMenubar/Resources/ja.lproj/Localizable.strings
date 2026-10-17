@@ -839,3 +839,7 @@
 "Shows every chat in this session" = "このセッションのすべてのチャットを表示します";
 "Shows this chat's prompts" = "このチャットのプロンプトを表示します";
 "Hides this chat's prompts" = "このチャットのプロンプトを隠します";
+
+/* Claude › Plan: spend a session carried past midnight into the next day */
+"%1$@ after midnight from %2$@ session" = "%2$@のセッションから0時以降に%1$@";
+"into %@" = "%@まで";

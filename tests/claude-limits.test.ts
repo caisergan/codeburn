@@ -545,3 +545,36 @@ describe('breakdowns', () => {
     expect(out.fullWeekAverage).toEqual({ usd: 1200, basis: 1 })
   })
 })
+
+describe('local days', () => {
+  function inZone<T>(zone: string, run: () => T): T {
+    const previous = process.env['TZ']
+    process.env['TZ'] = zone
+    try {
+      return run()
+    } finally {
+      if (previous === undefined) delete process.env['TZ']
+      else process.env['TZ'] = previous
+    }
+  }
+
+  // 21:10–02:10 in Istanbul (UTC+3): midnight falls at 21:00Z.
+  const readings = [reading('2026-10-16T18:30:00Z', { five: [10, '2026-10-16T23:10:00Z'] })]
+  const calls = [call('2026-10-16T19:00:00Z', 10), call('2026-10-16T21:30:00Z', 17.5), call('2026-10-16T22:40:00Z', 10)]
+  const id = '2026-10-16T23:10:00.000Z'
+
+  it('gives a session that crosses local midnight what it spent after it', () => {
+    const out = inZone('Europe/Istanbul', () => computeClaudeLimits(input({ now: '2026-10-17T12:00:00Z', readings, calls })))
+    const s = out.sessions.find(x => x.id === id)!
+    expect(s.spentUSD).toBe(37.5)
+    expect(s.afterMidnight).toEqual({ at: '2026-10-16T21:00:00.000Z', spentUSD: 27.5 })
+  })
+
+  it('leaves it out for a session inside one day, and while midnight is still ahead', () => {
+    const utc = inZone('UTC', () => computeClaudeLimits(input({ now: '2026-10-17T12:00:00Z', readings, calls })))
+    expect(utc.sessions.find(x => x.id === id)!.afterMidnight).toBeUndefined()
+    const running = inZone('Europe/Istanbul', () => computeClaudeLimits(input({ now: '2026-10-16T20:00:00Z', readings, calls: calls.slice(0, 1) })))
+    expect(running.current.session!.id).toBe(id)
+    expect(running.current.session!.afterMidnight).toBeUndefined()
+  })
+})

@@ -839,3 +839,7 @@
 "Shows every chat in this session" = "이 세션의 모든 채팅을 표시합니다";
 "Shows this chat's prompts" = "이 채팅의 프롬프트를 표시합니다";
 "Hides this chat's prompts" = "이 채팅의 프롬프트를 숨깁니다";
+
+/* Claude › Plan: spend a session carried past midnight into the next day */
+"%1$@ after midnight from %2$@ session" = "%2$@ 세션에서 자정 이후 %1$@";
+"into %@" = "%@까지";

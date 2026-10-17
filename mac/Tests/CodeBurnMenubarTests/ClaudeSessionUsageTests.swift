@@ -267,6 +267,17 @@ enum ClaudeLimitsFixture {
     static func report() throws -> ClaudeLimitsReport {
         try ClaudeLimitsReport.decode(Data(json.utf8))
     }
+
+    /// The fixture with its oldest session (Tue 17:20–22:20 UTC) spending
+    /// `spentUSD` after a midnight at `at`, without its newest `dropping`
+    /// sessions.
+    static func report(afterMidnight at: String, spentUSD: Double, dropping: Int = 0) throws -> ClaudeLimitsReport {
+        var root = try XCTUnwrap(JSONSerialization.jsonObject(with: Data(json.utf8)) as? [String: Any])
+        var sessions = try XCTUnwrap(root["sessions"] as? [[String: Any]])
+        sessions[sessions.count - 1]["afterMidnight"] = ["at": at, "spentUSD": spentUSD]
+        root["sessions"] = Array(sessions.dropFirst(dropping))
+        return try ClaudeLimitsReport.decode(JSONSerialization.data(withJSONObject: root))
+    }
 }
 
 @MainActor
@@ -389,6 +400,63 @@ final class ClaudeLimitsPresentationTests: XCTestCase {
         let locale = Locale(identifier: "en_US")
         XCTAssertEqual(ClaudeSessionFormat.sessionRange(start: start, end: end, inferred: false, now: now, calendar: calendar, locale: locale), "Tue 19:20–00:20")
         XCTAssertEqual(ClaudeSessionFormat.sessionRange(start: start, end: end, inferred: true, now: now, calendar: calendar, locale: locale), "≈ Tue 19:20–00:20")
+    }
+
+    // MARK: Days
+
+    private func calendar(_ zone: String) -> Calendar {
+        var c = Calendar(identifier: .gregorian)
+        c.timeZone = TimeZone(identifier: zone)!
+        return c
+    }
+
+    /// In Istanbul the oldest session runs Tue 20:20–Wed 01:20: what it spent
+    /// after 21:00Z goes under Wednesday, next to Wednesday's own rows.
+    func testDaysCarryASessionsSpendPastMidnightIntoTheNextDay() throws {
+        let report = try ClaudeLimitsFixture.report(afterMidnight: "2026-10-13T21:00:00.000Z", spentUSD: 120)
+        let days = ClaudeSessionDay.days(report.sessions, calendar: calendar("Europe/Istanbul"))
+        XCTAssertEqual(days.map { $0.sessions.map(\.id) }, [
+            ["2026-10-14T16:00:00.000Z", "2026-10-14T07:30:00.000Z"],
+            ["2026-10-13T22:20:00.000Z"],
+        ])
+        XCTAssertEqual(days[0].spentUSD, 129.8, accuracy: 0.001)
+        let carry = try XCTUnwrap(days[0].carryOver)
+        XCTAssertEqual(carry.session.id, "2026-10-13T22:20:00.000Z")
+        XCTAssertEqual(carry.spentUSD, 120)
+        XCTAssertEqual(carry.share, 120 / 184.87, accuracy: 0.0001)
+        XCTAssertNil(days[1].carryOver)
+    }
+
+    /// Working past midnight with no session started since: today still gets
+    /// its group, so its small hours are not missing from the list.
+    func testADayWithNoSessionOfItsOwnStillGetsItsCarryOver() throws {
+        let report = try ClaudeLimitsFixture.report(afterMidnight: "2026-10-13T21:00:00.000Z", spentUSD: 120, dropping: 2)
+        let days = ClaudeSessionDay.days(report.sessions, calendar: calendar("Europe/Istanbul"))
+        XCTAssertEqual(days.map(\.day), [
+            ClaudeLimitsReport.parseDate("2026-10-13T21:00:00Z")!,
+            ClaudeLimitsReport.parseDate("2026-10-12T21:00:00Z")!,
+        ])
+        XCTAssertTrue(days[0].sessions.isEmpty)
+        XCTAssertEqual(days[0].spentUSD, 0)
+        XCTAssertEqual(days[0].carryOver?.spentUSD, 120)
+    }
+
+    /// A midnight from a CLI in another time zone, and a carry-over that
+    /// would show as "+$0", are left out.
+    func testCarryOverIsLeftOutInAnotherTimeZoneAndUnderFiftyCents() throws {
+        let report = try ClaudeLimitsFixture.report(afterMidnight: "2026-10-13T21:00:00.000Z", spentUSD: 120)
+        let utcDays = ClaudeSessionDay.days(report.sessions, calendar: calendar("UTC"))
+        XCTAssertEqual(utcDays.count, 2)
+        XCTAssertTrue(utcDays.allSatisfy { $0.carryOver == nil })
+
+        let small = try ClaudeLimitsFixture.report(afterMidnight: "2026-10-13T21:00:00.000Z", spentUSD: 0.3)
+        XCTAssertTrue(ClaudeSessionDay.days(small.sessions, calendar: calendar("Europe/Istanbul")).allSatisfy { $0.carryOver == nil })
+    }
+
+    func testDecodesWithoutAfterMidnight() throws {
+        XCTAssertTrue(try report().sessions.allSatisfy { $0.afterMidnight == nil })
+        let carried = try ClaudeLimitsFixture.report(afterMidnight: "2026-10-13T21:00:00.000Z", spentUSD: 120)
+        XCTAssertEqual(carried.sessions.last?.afterMidnight?.at, ClaudeLimitsReport.parseDate("2026-10-13T21:00:00Z"))
     }
 }
 

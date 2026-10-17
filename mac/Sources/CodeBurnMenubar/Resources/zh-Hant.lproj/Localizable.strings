@@ -835,3 +835,7 @@
 "Shows every chat in this session" = "顯示此會話中的所有對話";
 "Shows this chat's prompts" = "顯示此對話的提示";
 "Hides this chat's prompts" = "隱藏此對話的提示";
+
+/* Claude › Plan: spend a session carried past midnight into the next day */
+"%1$@ after midnight from %2$@ session" = "%2$@ 會話在午夜後 %1$@";
+"into %@" = "延續至%@";
