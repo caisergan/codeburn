@@ -843,3 +843,14 @@
 /* Claude › Plan: spend a session carried past midnight into the next day */
 "%1$@ after midnight from %2$@ session" = "%1$@ après minuit, session de %2$@";
 "into %@" = "jusqu’au %@";
+/* Claude sessions: paired devices */
+"This Mac" = "Ce Mac";
+"devices" = "appareils";
+"other device" = "autre appareil";
+"no chat names" = "sans noms de chats";
+"%1$@ last synced %2$@ · its spend after that is missing" = "%1$@ synchronisé pour la dernière fois à %2$@ · ses dépenses depuis manquent";
+"%@ has not synced yet, so its spend is missing" = "%@ ne s'est pas encore synchronisé, ses dépenses manquent donc";
+"%@ runs an older CodeBurn, so its spend is missing. Update it to count it." = "%@ utilise une ancienne version de CodeBurn, ses dépenses manquent donc. Mettez-le à jour pour les compter.";
+"%@ no longer accepts this Mac, so its spend is missing. Pair it again." = "%@ n'accepte plus ce Mac, ses dépenses manquent donc. Associez-le à nouveau.";
+"%@ is on another Claude account, so it is not counted here" = "%@ utilise un autre compte Claude, il n'est donc pas compté ici";
+"Used outside your devices: the 5-hour limit rose while they spent almost nothing" = "Utilisée hors de vos appareils : la limite de 5 h a augmenté alors qu'ils n'ont presque rien dépensé";

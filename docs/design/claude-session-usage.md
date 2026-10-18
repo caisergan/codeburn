@@ -651,6 +651,235 @@ On a real machine:
 - A session that hits the 5-hour limit shows `⚠︎` and the exact time.
 - A warm `codeburn limits` through `serve` answers in under 100 ms at p95.
 
+## Paired devices (2026-10-18)
+
+Status: implemented. Decisions 2–4 were confirmed as recommended. Where the
+build settled a detail, see "Implementation notes (paired devices)" at the end
+of this section.
+
+### Problem
+
+The limit percents are account-wide, but spend comes from this Mac's
+transcripts only. When a paired device (`codeburn share` / `codeburn devices`)
+runs Claude Code on the same account, its work raises the 5-hour and weekly
+percents with no dollars behind them. That is more than a gap in the totals:
+every value derived from spent ÷ used comes out too low (full session, full
+week, week points per dollar), and so do the estimates built on them. A
+session spent only on the other device reads "used outside this Mac".
+
+The measured case: a MacBook and a Linux VM (`instance-20260829-212457`),
+paired over Tailscale, both signed in to the same Claude Max account.
+
+Sharing today sends aggregate payloads with all per-session detail stripped
+(`src/sharing/sanitize.ts`), so nothing a peer sends can be placed in a 5-hour
+window.
+
+### Decisions
+
+1. **No chat names or prompts leave a device.** A peer appears in a session as
+   one unnamed line per device. Names may become an opt-in later. (Chosen
+   2026-10-18.)
+2. **Backfill and cache.** A peer's transcripts stay on its disk, so the Mac
+   fetches the whole lookback when the peer comes back and keeps a local copy,
+   so `share` does not need to run all the time.
+3. **Scope: the Claude sessions and weeks only.** The Claude tab's
+   Today/7D/… totals and the Local/Combined hero are unchanged.
+4. **Old peers are flagged, not ignored.** A paired device that cannot send
+   this data shows a warning rather than silently undercounting.
+
+### What a peer sends
+
+A new authenticated endpoint on the share server, next to `/api/usage`, with
+the same bearer-token and pinned-certificate check:
+
+```
+GET /api/claude-limits?since=2026-09-12T00:00:00Z
+
+{ "version": 1,
+  "through": "2026-10-18T05:12:40Z",
+  "lastCallAt": "2026-10-18T05:11:58Z",
+  "accountHash": "9c1f…",
+  "slots": [
+    { "at": "2026-10-18T04:50:00Z", "model": "claude-opus-5-5",
+      "costUSD": 3.41, "unpriced": false,
+      "tokens": { "input": 1204, "output": 9310,
+                  "cacheRead": 4120055, "cacheWrite": 88210 } } ],
+  "events": [
+    { "limit": "five_hour", "at": "2026-10-18T03:47:12Z",
+      "resetsAt": "2026-10-18T07:00:00Z" } ] }
+```
+
+- **Slots** are the peer's default-account Claude calls, summed per 10-minute
+  slot (UTC, floored) and model. Session windows start on 10-minute marks, so
+  each slot falls wholly inside one session and one week. The data is the same
+  kind the shared timeline already carries (time buckets, models, tokens,
+  cost), at a finer step: no chat id, title, project, path or prompt.
+- **Events** are the peer's refused requests, from the same scanner the Mac
+  uses (`collectLimitEvents`). A limit hit on the peer gives the Mac its exact
+  100% point.
+- `through` is the time the peer's parse covers; `lastCallAt` drives the live
+  schedule below.
+- The peer computes this with its own pricing, as the existing payload does.
+- An older peer answers 404. That marks the device as unable to send (decision
+  4).
+
+### Fetching and caching on the Mac
+
+- `codeburn limits` gains `--devices`. With it, before computing, the CLI asks
+  each paired device for slots and events since that device's cached `through`
+  minus one slot (the last slot may have been partial), with the existing
+  connect timeout. Without it, the command reads the cache only and stays
+  network-free, as V1 promised. The menu bar passes `--devices`; the flag
+  joins the `serve` allowlist with the command.
+- The cache is one file per device, keyed by certificate fingerprint, in
+  `claude-limit-peers/` under the codeburn cache directory, mode `0600`,
+  written atomically. A fetch replaces the slots from its `since` onward.
+  Slots and events older than the lookback (`LOOKBACK_MS`) are pruned.
+- An unreachable device keeps its cached data. When the cached `through` falls
+  before the end of a shown session, that session warns "instance-… last
+  synced 14:20", and its values derived from spend become `≈`.
+- `codeburn devices rm` deletes the device's cache file.
+
+### Live readings
+
+The V1 schedule reads limits every 2 minutes while this Mac's transcripts are
+being written. With paired devices:
+
+- While the popover is closed, the refresh loop runs `codeburn limits
+  --devices` every 2 minutes whenever at least one device is paired and the
+  live toggle is on. An incremental fetch costs a few hundred bytes.
+- Claude counts as active when this Mac wrote a transcript, or any peer's
+  `lastCallAt` is, within the last 10 minutes. The 2-minute limit readings
+  then run as in V1.
+- These requests reset the peer's 10-minute idle timer, so a peer started
+  without `--always` keeps sharing while the Mac is awake. That is the
+  intended trade: `--always` or a service is still the way to keep a headless
+  device reachable after reboots.
+
+### How the numbers change
+
+- **Spent and tokens** for a session or week sum this Mac's calls and every
+  device's slots in the window. Every value built on spent (full session,
+  full week, week points per dollar, the rate's fallbacks) uses the sum.
+- **Ran out after $X** sums spend up to the first refused request, whichever
+  device refused it. A peer's slot that contains the refusal counts in full,
+  so the figure carries `≈` when that slot had spend; this Mac's own calls stay
+  exact.
+- **Outside this Mac** becomes **outside your devices**: a session whose
+  percent rose while spend across all devices stayed under $0.50.
+- Percents and readings are unchanged: they were already account-wide.
+
+### What the user sees
+
+- **Session and week rows**: Spent includes every device. Nothing else on the
+  row changes.
+- **An open session's first line** names the split when a peer has spend in
+  it: `375M tokens · Mac $30 · instance-… $12  full session ≈ $190`.
+- **Chats**: each peer is one line among the chats, ranked by spend, with the
+  device symbol and its name, `no chat names` as its second line, and no
+  prompt list or resume command.
+- **Hours**: bars include peer spend; the hover card adds the split
+  (`18:10–19:10 · $9 (Mac $6 · instance-… $3) · 5h 6% → 15%`).
+- **Models**: peer slots count toward their models.
+- **Week strip, Weeks, Plan lines**: no visual change; they use the summed
+  values.
+- **Warnings** (callouts under the tab, as in V1): a peer last synced before
+  the session ended; a peer that cannot send this data ("instance-… runs an
+  older CodeBurn; its spend is missing"); a peer's unpriced model.
+
+### Edge cases
+
+| Case | Behavior |
+|---|---|
+| Peer on another Claude account | Its slots would inflate this account's spend. Not detectable from slots; the peer sends a hash of its account id and the Mac drops data from a different account. |
+| Peer with several Claude config directories | It sends its default account only, as the Mac does. |
+| Same transcripts on both devices (a copied `~/.claude`) | Counted twice. Slots carry no message ids, so this is not detected. |
+| Peer clock skew | Slots use the peer's clock. Skew under a minute moves spend between adjacent slots, never across a 10-minute window edge by more than that. |
+| Peer re-paired (new certificate) | A new cache; the old file is removed with the old pairing. |
+| Time zone with a 15- or 45-minute offset | Local-hour Hours bars split a peer slot by time, pro rata. |
+
+The account check in the first row is part of this spec: `/api/claude-limits`
+returns `accountHash` (SHA-256 of `oauthAccount.accountUuid` in the peer's
+`~/.claude.json`), and the Mac compares it with its own. No hash on either
+side (an API-key login) means the check is skipped. A mismatch shows "on
+another Claude account, not counted" instead of the spend.
+
+### Code boundaries
+
+- **src/sharing**: the endpoint on `ShareServer` with a `getClaudeLimits`
+  option, wired in `share-run.ts`; `fetchClaudeLimits` in `client.ts`; the
+  cache in a new `claude-limit-peers.ts`.
+- **src/claude-limit-sources.ts**: slot aggregation from the parsed calls, and
+  reading peer caches into `LimitsInput`.
+- **src/claude-limits.ts**: `LimitsInput` gains `peers: { id, name, through,
+  slots, events, status }[]`. Peer events merge with local ones (first refusal
+  wins); peer slots join the spend sums but never the chat list. The output
+  gains a per-device split on sessions and weeks and the peer warnings.
+- **mac/**: decoding the split and warnings; the peer chat line; the Hours
+  hover split; the refresh-loop trigger and the peer-aware activity check in
+  `QuotaRefreshDecision`.
+- The peer must run a CodeBurn build with the endpoint. `scripts/install-local.sh`
+  builds the Mac app as well, so a Linux peer needs a CLI-only install path.
+
+### Verification
+
+CLI:
+
+- Slot aggregation: calls on 10-minute edges land in the right slot; model
+  split; unpriced models flagged.
+- Merge: a peer-only session has spend and loses "outside this Mac"; peer
+  events set exact 100% points; the first refusal across devices wins.
+- Cache: incremental fetch replaces the overlap slot; pruning; an unreachable
+  peer keeps its cache and marks affected values `≈`; a 404 peer warns.
+- Account hash mismatch drops the peer's data.
+- Closure still holds with a peer: across a closed week, per-session week
+  shares sum to the final percent within ±2 points.
+- `codeburn limits` without `--devices` makes no network calls.
+
+Real machines: with the Mac and the VM both working one session, the session's
+Spent in the menu bar equals `codeburn limits` on the Mac plus the VM's own
+`codeburn limits` for that window, within one slot.
+
+### Implementation notes (paired devices)
+
+- **A slot enters the math as two calls**: its spend at the slot's first call,
+  and a call with no spend at its last. Spend sums, inferred windows, chats,
+  models and hours then need no peer-specific code, and the week share is
+  bracketed by when the device actually worked, not by the slot's edges.
+  Slot times are clamped into their slot whatever the device sent.
+- **Every answer starts on a slot mark.** The host asks from its cached
+  `through` minus one slot and replaces its cache from the start of that slot;
+  the device rounds `since` down to the same mark, so the boundary slot comes
+  back whole rather than partial.
+- **Missing spend shows `≥`, not `≈`.** Spend that leaves a device out is a
+  lower bound, and so is every value divided from it (`full session ≥ $114`).
+  A missing-data note needs the device's data to stop more than 10 minutes
+  before the window's end (or now), and only applies from the day it was
+  paired.
+- **Fetch pacing**: a device that answered is asked again after 30 seconds at
+  the earliest, one that failed after 2 minutes, so an offline device does not
+  slow every refresh. The connect timeout is the sharing client's 3 seconds;
+  the answer may take 8.
+- **Device status** is one of `ok`, `unreachable` (cache kept), `unsupported`
+  (404 or an answer of another version), `unauthorized` (401),
+  `other_account` (cache cleared) and `not_synced`.
+- **The account hash** is SHA-256 over a fixed prefix and
+  `oauthAccount.accountUuid`, read from `~/.claude.json` for the default
+  directory and from `<dir>/.claude.json` for a `CLAUDE_CONFIG_DIR`, never
+  falling back from one to the other.
+- **Removed devices**: every `limits --devices` deletes the caches of devices
+  no longer in `remote-devices.json`, whichever way they were removed.
+- **The menu bar** always passes `--devices` (free with nothing paired),
+  refreshes the report every 2 minutes (5 in Low Power Mode) while any device
+  is paired and the live toggle is on, and counts a device's newest call as
+  Claude working here; a device clock ahead of this one counts as now.
+- **Hover text** for an hour or a day with device spend reads
+  `$13 (This Mac $8 · devices $5)`; the legend names the device, or "devices"
+  for several. A device on another account is a note, not a warning.
+- **Measured on the design account**: a device's first answer (the whole
+  lookback, about 1,700 slots) took 0.8 s cold and 465 KB; an incremental one
+  68 ms and under 2 KB.
+
 ## Backlog (not in this implementation)
 
 - Codex: rollouts carry `rate_limits.primary` and `rate_limits.secondary`

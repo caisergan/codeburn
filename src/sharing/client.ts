@@ -102,6 +102,12 @@ export function fetchUsage(ep: PeerEndpoint, token: string, query: UsageQuery = 
   return call(ep, 'GET', `/api/usage${qs ? `?${qs}` : ''}`, { authorization: `Bearer ${token}` })
 }
 
+// Claude spend slots and limit hits since `since` (see claude-limits-share).
+export function fetchClaudeLimits(ep: PeerEndpoint, token: string, since: string | undefined, timeoutMs = 8000): Promise<Response> {
+  const qs = since ? `?${new URLSearchParams({ since }).toString()}` : ''
+  return call(ep, 'GET', `/api/claude-limits${qs}`, { authorization: `Bearer ${token}` }, undefined, timeoutMs)
+}
+
 function safeJson(s: string): unknown {
   try {
     return JSON.parse(s)

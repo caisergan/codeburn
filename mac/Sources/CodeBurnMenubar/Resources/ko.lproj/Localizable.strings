@@ -843,3 +843,14 @@
 /* Claude › Plan: spend a session carried past midnight into the next day */
 "%1$@ after midnight from %2$@ session" = "%2$@ 세션에서 자정 이후 %1$@";
 "into %@" = "%@까지";
+/* Claude sessions: paired devices */
+"This Mac" = "이 Mac";
+"devices" = "기기";
+"other device" = "다른 기기";
+"no chat names" = "채팅 이름 없음";
+"%1$@ last synced %2$@ · its spend after that is missing" = "%1$@ 마지막 동기화 %2$@ · 그 이후 지출이 빠져 있습니다";
+"%@ has not synced yet, so its spend is missing" = "%@ 이(가) 아직 동기화되지 않아 지출이 빠져 있습니다";
+"%@ runs an older CodeBurn, so its spend is missing. Update it to count it." = "%@ 이(가) 이전 CodeBurn을 사용해 지출이 빠져 있습니다. 업데이트하면 포함됩니다.";
+"%@ no longer accepts this Mac, so its spend is missing. Pair it again." = "%@ 이(가) 더 이상 이 Mac을 허용하지 않아 지출이 빠져 있습니다. 다시 페어링하세요.";
+"%@ is on another Claude account, so it is not counted here" = "%@ 은(는) 다른 Claude 계정이라 여기서는 집계되지 않습니다";
+"Used outside your devices: the 5-hour limit rose while they spent almost nothing" = "내 기기 밖에서 사용됨: 기기들의 지출이 거의 없는데 5시간 한도가 올랐습니다";

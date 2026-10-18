@@ -10,6 +10,9 @@ enum Theme {
     static var brandAccentDeep: Color { ThemeState.shared.preset.deep }
     static var brandAccentGlow: Color { ThemeState.shared.preset.glow }
 
+    /// Spend from a paired device, beside the accent this Mac's spend uses.
+    static let pairedDevice      = Color(red: 0x8F/255.0, green: 0xA3/255.0, blue: 0xB8/255.0)
+
     static let warmSurface       = Color(red: 0xFA/255.0, green: 0xF7/255.0, blue: 0xF3/255.0)
     static let warmSurfaceDark   = Color(red: 0x1C/255.0, green: 0x18/255.0, blue: 0x16/255.0)
 

@@ -453,6 +453,18 @@ final class ClaudeLimitsPresentationTests: XCTestCase {
         XCTAssertTrue(ClaudeSessionDay.days(small.sessions, calendar: calendar("Europe/Istanbul")).allSatisfy { $0.carryOver == nil })
     }
 
+    /// A session missing a paired device's spend makes its day's total `≥ $X`,
+    /// like an unpriced model does.
+    func testADayWithMissingDeviceSpendIsALowerBound() throws {
+        var root = try XCTUnwrap(JSONSerialization.jsonObject(with: Data(ClaudeLimitsFixture.json.utf8)) as? [String: Any])
+        var sessions = try XCTUnwrap(root["sessions"] as? [[String: Any]])
+        sessions[0]["spentLowerBound"] = true
+        root["sessions"] = sessions
+        let report = try ClaudeLimitsReport.decode(JSONSerialization.data(withJSONObject: root))
+        let days = ClaudeSessionDay.days(report.sessions, calendar: calendar("Europe/Istanbul"))
+        XCTAssertEqual(days.map(\.unpriced), [true, false])
+    }
+
     func testDecodesWithoutAfterMidnight() throws {
         XCTAssertTrue(try report().sessions.allSatisfy { $0.afterMidnight == nil })
         let carried = try ClaudeLimitsFixture.report(afterMidnight: "2026-10-13T21:00:00.000Z", spentUSD: 120)

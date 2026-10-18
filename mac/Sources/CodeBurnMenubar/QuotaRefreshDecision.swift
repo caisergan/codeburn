@@ -36,6 +36,18 @@ enum QuotaRefreshDecision {
     /// last call.
     static let claudeActiveWindowSeconds: TimeInterval = 10 * 60
 
+    /// Claude's latest work here or on a paired device. A device's clock
+    /// may run ahead; a time in the future counts as now, never later.
+    static func latestClaudeActivity(localWriteAt: Date?, deviceCallAt: Date?, now: Date = Date()) -> Date? {
+        let device = deviceCallAt.map { min($0, now) }
+        switch (localWriteAt, device) {
+        case let (local?, device?): return max(local, device)
+        case let (local?, nil): return local
+        case let (nil, device?): return device
+        case (nil, nil): return nil
+        }
+    }
+
     /// How often limits are read while Claude is working.
     static func claudeLiveReadingInterval(lowPowerMode: Bool) -> TimeInterval {
         lowPowerMode ? 5 * 60 : 2 * 60

@@ -941,10 +941,20 @@ final class AppDelegate: NSObject, NSApplicationDelegate, NSPopoverDelegate, NSM
     /// the display off is exactly the stretch whose readings would be missing.
     private func runClaudeLiveReadingIfDue(now: Date = Date()) {
         ClaudeActivityMonitor.shared.start()
+        // Paired devices only report their Claude work when asked, so with
+        // any paired the sessions report is refreshed on the same 2-minute
+        // beat; their newest call then counts as Claude working here.
+        let report = store.claudeLimits
+        if ClaudeLiveReadingPreference.isEnabled(), report?.hasPairedDevices == true {
+            Task { [store] in await store.refreshClaudeLimits(minAge: QuotaRefreshDecision.claudeLiveReadingInterval(lowPowerMode: ProcessInfo.processInfo.isLowPowerModeEnabled) - QuotaRefreshDecision.claudeLiveReadingSlackSeconds) }
+        }
         guard QuotaRefreshDecision.claudeLiveReadingDue(
             enabled: ClaudeLiveReadingPreference.isEnabled(),
             connected: store.claudeQuotaBootstrapChecker(),
-            lastClaudeWriteAt: ClaudeActivityMonitor.shared.lastWriteAt,
+            lastClaudeWriteAt: QuotaRefreshDecision.latestClaudeActivity(
+                localWriteAt: ClaudeActivityMonitor.shared.lastWriteAt,
+                deviceCallAt: report?.latestDeviceCallAt
+            ),
             lastAttemptAt: lastSubscriptionRefreshAt,
             backoffUntil: nextClaudeQuotaRefreshAt,
             lowPowerMode: ProcessInfo.processInfo.isLowPowerModeEnabled,

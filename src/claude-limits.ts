@@ -25,8 +25,12 @@ const MIN_WEEK_PCT_FOR_VALUE = 5
 const RATE_MIN_FIVE_HOUR_PCT = 30
 const RATE_MAX_SESSIONS = 10
 const RATE_MIN_SESSIONS = 5
-/// A session whose 5-hour percent rose while this Mac spent less than this.
+/// A session whose 5-hour percent rose while this Mac (and every paired
+/// device) spent less than this.
 const OUTSIDE_THIS_MAC_USD = 0.5
+/// A paired device whose data stops this long before a window's end (or now)
+/// is missing spend there. Covers the two-minute fetch cadence.
+const DEVICE_STALE_MS = 10 * MINUTE_MS
 /// The prompts a chat row carries for one session; the rest are only counted.
 const MAX_PROMPTS_PER_CHAT = 12
 
@@ -66,10 +70,46 @@ export type LimitCall = {
   /// The chat's project folder name, and its path for `claude --resume`.
   chatProject?: string
   chatPath?: string
+  /// Set on spend a paired device sent; such calls carry no chat detail.
+  device?: { id: string; name: string }
 }
 
 /// One prompt the user typed, cleaned of what tools wrapped around it.
 export type LimitPrompt = { at: number; chatId: string; text: string }
+
+/// A paired device's Claude spend in one 10-minute slot (UTC) and model,
+/// with the times of the slot's first and last call.
+export type LimitSlot = {
+  at: number
+  firstAt: number
+  lastAt: number
+  model: string
+  modelName?: string
+  costUSD: number
+  unpriced: boolean
+  tokens: TokenCounts
+}
+
+/// `ok`: synced. `unreachable`: the last fetch failed (cached data is kept).
+/// `unsupported`: it runs a CodeBurn without this data. `unauthorized`: it no
+/// longer accepts this Mac's token. `other_account`: it is signed in to
+/// another Claude account. `not_synced`: never fetched.
+export type DeviceStatus = 'ok' | 'unreachable' | 'unsupported' | 'unauthorized' | 'other_account' | 'not_synced'
+
+export type PeerLimitData = {
+  id: string
+  name: string
+  /// When the device was paired: notes about missing data start here.
+  addedAt: number
+  status: DeviceStatus
+  /// The time the device's data covers, its newest call, and the last fetch
+  /// that succeeded.
+  through: number | null
+  lastCallAt: number | null
+  lastSyncedAt: number | null
+  slots: LimitSlot[]
+  events: LimitEvent[]
+}
 
 export type LimitsInput = {
   now: number
@@ -79,6 +119,9 @@ export type LimitsInput = {
   calls: LimitCall[]
   /// Sorted by time; optional so callers without prompts need not pass any.
   prompts?: LimitPrompt[]
+  /// Paired devices on the same Claude account, and this device's name.
+  peers?: PeerLimitData[]
+  localName?: string
 }
 
 export type Gap = { from: string; to: string; reason: string }
@@ -96,17 +139,43 @@ export type ChatShare = {
   /// MAX_PROMPTS_PER_CHAT kept.
   promptCount: number
   prompts: Array<{ at: string; text: string }>
+  /// A paired device's spend, as one line with no chat detail.
+  device?: { id: string; name: string }
 }
 
-export type ModelShare = { model: string; spentUSD: number; tokens: number }
+/// `peerSpentUSD`: the part paired devices spent, when they spent any.
+export type ModelShare = { model: string; spentUSD: number; tokens: number; peerSpentUSD?: number }
 
 /// One hour of a session, from its start. `fiveHourPct` is the highest
 /// reading taken by the end of the hour, null when no reading fell inside it.
-export type HourOut = { start: string; end: string; spentUSD: number; tokens: number; fiveHourPct: number | null }
+export type HourOut = { start: string; end: string; spentUSD: number; tokens: number; fiveHourPct: number | null; peerSpentUSD?: number }
 
 /// One 24-hour slice of a week, from the week's reset. `usedPct` follows the
 /// same rule as an hour's `fiveHourPct`.
-export type DayOut = { start: string; end: string; spentUSD: number; tokens: number; usedPct: number | null }
+export type DayOut = { start: string; end: string; spentUSD: number; tokens: number; usedPct: number | null; peerSpentUSD?: number }
+
+/// A window's spend by device, this device first; sent only when a paired
+/// device spent in it.
+export type DeviceSpend = { id: string; name: string; local: boolean; spentUSD: number }
+
+/// Why a window's spend leaves a paired device out. `stale`: its data stops
+/// at `through`. `unreachable`: it was never synced. `unsupported`,
+/// `unauthorized`, `other_account`: as in DeviceStatus.
+export type DeviceNote = {
+  id: string
+  name: string
+  kind: 'stale' | 'unreachable' | 'unsupported' | 'unauthorized' | 'other_account'
+  through?: string
+}
+
+export type DeviceOut = {
+  id: string
+  name: string
+  status: DeviceStatus
+  through: string | null
+  lastCallAt: string | null
+  lastSyncedAt: string | null
+}
 
 /// A session as one block of a week: its share of that week.
 export type WeekSession = {
@@ -136,7 +205,9 @@ export type SessionOut = {
   weekTo?: number
   fullSessionUSD?: number
   fullSessionQuality: Quality
-  ranOut?: { limit: LimitName; at: string; spentUSD: number }
+  /// `approximate`: a paired device's 10-minute slot straddles the refusal,
+  /// so its spend up to the second is not known.
+  ranOut?: { limit: LimitName; at: string; spentUSD: number; approximate?: boolean }
   outsideThisMac: boolean
   unpricedModels: string[]
   chats: ChatShare[]
@@ -147,6 +218,10 @@ export type SessionOut = {
   /// started, so this part belongs to the next day's total.
   afterMidnight?: { at: string; spentUSD: number }
   gap?: Gap
+  devices?: DeviceSpend[]
+  deviceNotes?: DeviceNote[]
+  /// A paired device's spend is missing, so `spentUSD` is a lower bound.
+  spentLowerBound?: boolean
 }
 
 export type WeekEndReason = 'reset' | 'early_reset' | 'moved' | 'inferred' | 'running'
@@ -170,7 +245,10 @@ export type WeekOut = {
   /// The week's sessions, oldest first.
   sessions: WeekSession[]
   /// The running week only: the previous week at the same time into it.
-  previousAtSamePoint?: { at: string; spentUSD: number; usedPct: number | null; usedQuality: Quality }
+  previousAtSamePoint?: { at: string; spentUSD: number; usedPct: number | null; usedQuality: Quality; devices?: DeviceSpend[] }
+  devices?: DeviceSpend[]
+  deviceNotes?: DeviceNote[]
+  spentLowerBound?: boolean
 }
 
 export type LimitsOutput = {
@@ -186,6 +264,8 @@ export type LimitsOutput = {
   sessions: SessionOut[]
   weeks: WeekOut[]
   gaps: Gap[]
+  /// Paired devices and how current their data is; empty with none.
+  devices: DeviceOut[]
 }
 
 /// A window's identity. Raw reset times jitter by up to a second
@@ -359,7 +439,18 @@ function weekAt(weeks: WeekWindow[], ms: number): WeekWindow | undefined {
 // Spend
 // ---------------------------------------------------------------------------
 
-type Spend = { spentUSD: number; tokens: TokenCounts; unpriced: Set<string>; first: number | null; last: number | null }
+type Spend = {
+  spentUSD: number
+  tokens: TokenCounts
+  unpriced: Set<string>
+  first: number | null
+  last: number | null
+  /// This device's part of `spentUSD`, and paired devices' in total and by
+  /// device id.
+  localSpentUSD: number
+  peerSpentUSD: number
+  byDevice: Map<string, { name: string; spentUSD: number }>
+}
 
 /// Index of the first call at or after `at`. `calls` is sorted by time.
 function lowerBound(calls: LimitCall[], at: number): number {
@@ -374,11 +465,19 @@ function lowerBound(calls: LimitCall[], at: number): number {
 }
 
 function spendIn(calls: LimitCall[], from: number, to: number): Spend {
-  const out: Spend = { spentUSD: 0, tokens: zeroTokens(), unpriced: new Set(), first: null, last: null }
+  const out: Spend = { spentUSD: 0, tokens: zeroTokens(), unpriced: new Set(), first: null, last: null, localSpentUSD: 0, peerSpentUSD: 0, byDevice: new Map() }
   for (let i = lowerBound(calls, from); i < calls.length; i++) {
     const call = calls[i]!
     if (call.at >= to) break
     out.spentUSD += call.costUSD
+    if (call.device) {
+      out.peerSpentUSD += call.costUSD
+      const row = out.byDevice.get(call.device.id) ?? { name: call.device.name, spentUSD: 0 }
+      row.spentUSD += call.costUSD
+      out.byDevice.set(call.device.id, row)
+    } else {
+      out.localSpentUSD += call.costUSD
+    }
     addTokens(out.tokens, call.tokens)
     if (call.unpriced) out.unpriced.add(call.model)
     if (out.first === null || call.at < out.first) out.first = call.at
@@ -402,6 +501,7 @@ function chatsIn(calls: LimitCall[], prompts: LimitPrompt[], from: number, to: n
           spentUSD: 0,
           ...(call.chatProject ? { project: call.chatProject } : {}),
           ...(call.chatPath ? { path: call.chatPath } : {}),
+          ...(call.device ? { device: call.device } : {}),
           firstAt: '',
           lastAt: '',
           promptCount: 0,
@@ -451,6 +551,7 @@ function modelsIn(calls: LimitCall[], from: number, to: number): ModelShare[] {
     const row = byModel.get(name) ?? { model: name, spentUSD: 0, tokens: 0 }
     row.spentUSD += call.costUSD
     row.tokens += totalTokens(call.tokens)
+    if (call.device && call.costUSD > 0) row.peerSpentUSD = (row.peerSpentUSD ?? 0) + call.costUSD
     byModel.set(name, row)
   }
   return [...byModel.values()].sort((a, b) => b.spentUSD - a.spentUSD || b.tokens - a.tokens || a.model.localeCompare(b.model))
@@ -460,7 +561,7 @@ function totalTokens(t: TokenCounts): number {
   return t.input + t.output + t.cacheRead + t.cacheWrite
 }
 
-type Slice = { start: number; end: number; spentUSD: number; tokens: number; pct: number | null }
+type Slice = { start: number; end: number; spentUSD: number; tokens: number; pct: number | null; peerSpentUSD: number }
 
 /// `from`..`to` cut into `size` slices, up to `now`, each with its spend and
 /// the highest of `readings` (time, percent) taken by its end. A slice with no
@@ -488,7 +589,7 @@ function slices(
     }
     let pct = inside ? highest : null
     if (fullAt !== null && fullAt < end) pct = 100
-    out.push({ start, end, spentUSD: spend.spentUSD, tokens: totalTokens(spend.tokens), pct })
+    out.push({ start, end, spentUSD: spend.spentUSD, tokens: totalTokens(spend.tokens), pct, peerSpentUSD: spend.peerSpentUSD })
   }
   return out
 }
@@ -508,12 +609,30 @@ type SessionCalc = {
   firstCallAt: number | null
 }
 
+/// What the per-window numbers need to know about paired devices.
+type PeerContext = {
+  peers: PeerLimitData[]
+  /// Slots with spend from devices that count, for the ran-out check.
+  slots: LimitSlot[]
+  localName: string
+  now: number
+}
+
 export function computeClaudeLimits(input: LimitsInput): LimitsOutput {
   const now = input.now
+  const peers = input.peers ?? []
+  // A device on another Claude account spent against other limits.
+  const counted = peers.filter(p => p.status !== 'other_account')
+  const ctx: PeerContext = {
+    peers,
+    slots: counted.flatMap(p => p.slots.map(clampSlot).filter(slot => slot.costUSD > 0)),
+    localName: input.localName ?? 'This device',
+    now,
+  }
   const readings = [...input.readings].sort((a, b) => a.at - b.at)
-  const calls = [...input.calls].sort((a, b) => a.at - b.at)
+  const calls = [...input.calls, ...counted.flatMap(peerCalls)].sort((a, b) => a.at - b.at)
   const prompts = [...(input.prompts ?? [])].sort((a, b) => a.at - b.at)
-  const events = firstEventPerWindow(input.events)
+  const events = firstEventPerWindow([...input.events, ...counted.flatMap(p => p.events)])
 
   const sessionWindows = buildSessionWindows(readings, events, calls)
   const weeks = buildWeekWindows(readings, events, now)
@@ -533,7 +652,7 @@ export function computeClaudeLimits(input: LimitsInput): LimitsOutput {
   }
 
   // Weeks first: the per-session estimates fall back to the week's ratio.
-  const weekOuts = weeks.map(w => computeWeek(w, readings, events, calls, now))
+  const weekOuts = weeks.map(w => computeWeek(w, readings, events, calls, ctx))
   // Week points per dollar, from the week's highest reading and the spend up
   // to that reading (spend after the last reading has not shown up in it yet).
   const weekRatios = weeks.map((w, i) => {
@@ -629,16 +748,25 @@ export function computeClaudeLimits(input: LimitsInput): LimitsOutput {
     let ranOut: SessionOut['ranOut']
     if (ranOutEvent) {
       const toHit = spendIn(calls, window.start, ranOutEvent.at + 1).spentUSD
-      ranOut = { limit: 'five_hour', at: iso(ranOutEvent.at), spentUSD: toHit }
+      const approximate = slotStraddles(ctx.slots, ranOutEvent.at)
+      ranOut = { limit: 'five_hour', at: iso(ranOutEvent.at), spentUSD: toHit, ...(approximate ? { approximate } : {}) }
       fullSessionUSD = toHit
-      fullSessionQuality = 'exact'
+      fullSessionQuality = approximate ? 'estimated' : 'exact'
     } else {
-      if (weekRanOut) ranOut = { limit: 'seven_day', at: iso(weekRanOut.at), spentUSD: spendIn(calls, window.start, weekRanOut.at + 1).spentUSD }
+      if (weekRanOut) {
+        const approximate = slotStraddles(ctx.slots, weekRanOut.at)
+        ranOut = { limit: 'seven_day', at: iso(weekRanOut.at), spentUSD: spendIn(calls, window.start, weekRanOut.at + 1).spentUSD, ...(approximate ? { approximate } : {}) }
+      }
       if (fiveHourPct !== null && fiveHourPct >= MIN_FIVE_HOUR_PCT_FOR_VALUE && spend.spentUSD > 0) {
         fullSessionUSD = spend.spentUSD / fiveHourPct * 100
         fullSessionQuality = 'estimated'
       }
     }
+    const deviceNotes = notesFor(ctx, window.start, window.end, running)
+    const spentLowerBound = deviceNotes.some(n => n.kind !== 'other_account')
+    // Missing spend makes every value divided from it too low.
+    if (spentLowerBound && fullSessionUSD !== undefined) fullSessionQuality = 'lowerBound'
+    const devices = deviceSplit(spend, ctx.localName)
 
     const outsideThisMac = fiveHourPct !== null && fiveHourPct >= 1 && spend.spentUSD < OUTSIDE_THIS_MAC_USD
     const hours = slices(
@@ -649,7 +777,7 @@ export function computeClaudeLimits(input: LimitsInput): LimitsOutput {
       HOUR_MS,
       now,
       ranOutEvent?.at ?? null,
-    ).map(h => ({ start: iso(h.start), end: iso(h.end), spentUSD: h.spentUSD, tokens: h.tokens, fiveHourPct: h.pct }))
+    ).map(h => ({ start: iso(h.start), end: iso(h.end), spentUSD: h.spentUSD, tokens: h.tokens, fiveHourPct: h.pct, ...peerPart(h.peerSpentUSD) }))
     const midnight = nextLocalMidnight(window.start)
     const afterMidnight = midnight < window.end && midnight <= now
       ? { at: iso(midnight), spentUSD: spendIn(calls, midnight, window.end).spentUSD }
@@ -678,6 +806,9 @@ export function computeClaudeLimits(input: LimitsInput): LimitsOutput {
       models: modelsIn(calls, window.start, window.end),
       hours,
       ...(afterMidnight ? { afterMidnight } : {}),
+      ...(devices ? { devices } : {}),
+      ...(deviceNotes.length > 0 ? { deviceNotes } : {}),
+      ...(spentLowerBound ? { spentLowerBound } : {}),
     }
     const gap = gapFor(gaps, window, sessionReadings.length > 0, fiveHourQuality, weekQuality)
     if (gap) out.gap = gap
@@ -747,7 +878,7 @@ export function computeClaudeLimits(input: LimitsInput): LimitsOutput {
     })
   })
   if (currentWeekIndex > 0) {
-    const same = previousAtSamePoint(weeks[currentWeekIndex]!, weeks[currentWeekIndex - 1]!, readings, events, calls, callTimes, now)
+    const same = previousAtSamePoint(weeks[currentWeekIndex]!, weeks[currentWeekIndex - 1]!, readings, events, calls, callTimes, ctx)
     if (same) weekOuts[currentWeekIndex]!.previousAtSamePoint = same
   }
 
@@ -787,10 +918,89 @@ export function computeClaudeLimits(input: LimitsInput): LimitsOutput {
     sessions,
     weeks: weekList,
     gaps: gaps.filter(g => Date.parse(g.to) >= now - (WEEK_LIST_COUNT + 1) * WEEK_MS),
+    devices: peers.map(p => ({
+      id: p.id,
+      name: p.name,
+      status: p.status,
+      through: p.through === null ? null : iso(p.through),
+      lastCallAt: p.lastCallAt === null ? null : iso(p.lastCallAt),
+      lastSyncedAt: p.lastSyncedAt === null ? null : iso(p.lastSyncedAt),
+    })),
   }
 }
 
-function computeWeek(w: WeekWindow, readings: LimitReading[], events: LimitEvent[], calls: LimitCall[], now: number): WeekOut {
+// ---------------------------------------------------------------------------
+// Paired devices
+// ---------------------------------------------------------------------------
+
+/// A slot's call times kept inside the slot, whatever the device sent.
+function clampSlot(slot: LimitSlot): LimitSlot {
+  const start = floorToTenMinutes(slot.at)
+  const last = start + TEN_MINUTES_MS - 1
+  const firstAt = Math.min(Math.max(slot.firstAt, start), last)
+  const lastAt = Math.min(Math.max(slot.lastAt, firstAt), last)
+  return { ...slot, at: start, firstAt, lastAt }
+}
+
+/// A device's slots as calls: the slot's spend at its first call, and a
+/// call with no spend at its last, so the window math sees when the device
+/// started and stopped. Windows start on 10-minute marks, so both stay in
+/// the slot's session and week.
+function peerCalls(peer: PeerLimitData): LimitCall[] {
+  const device = { id: peer.id, name: peer.name }
+  const chatId = `device:${peer.id}`
+  return peer.slots.map(clampSlot).flatMap(slot => {
+    const base = { model: slot.model, modelName: slot.modelName ?? slot.model, chatId, chatTitle: peer.name, device }
+    const first: LimitCall = { ...base, at: slot.firstAt, costUSD: Math.max(0, slot.costUSD), tokens: slot.tokens, unpriced: slot.unpriced }
+    if (slot.lastAt <= slot.firstAt) return [first]
+    return [first, { ...base, at: slot.lastAt, costUSD: 0, tokens: zeroTokens(), unpriced: false }]
+  })
+}
+
+/// Whether a device's slot spent both before and after `at`: its spend up to
+/// that second is then not known.
+function slotStraddles(slots: LimitSlot[], at: number): boolean {
+  return slots.some(slot => slot.firstAt <= at && slot.lastAt > at)
+}
+
+function deviceSplit(spend: Spend, localName: string): DeviceSpend[] | undefined {
+  const peers = [...spend.byDevice.entries()].filter(([, d]) => d.spentUSD > 0)
+  if (peers.length === 0) return undefined
+  return [
+    { id: 'local', name: localName, local: true, spentUSD: spend.localSpentUSD },
+    ...peers
+      .map(([id, d]) => ({ id, name: d.name, local: false, spentUSD: d.spentUSD }))
+      .sort((a, b) => b.spentUSD - a.spentUSD || a.name.localeCompare(b.name)),
+  ]
+}
+
+/// The paired devices whose spend in [start, end) is missing, from the day
+/// they were paired. A device on another account is named on the running
+/// window only: nothing is missing, it just is not counted.
+function notesFor(ctx: PeerContext, start: number, end: number, running: boolean): DeviceNote[] {
+  const notes: DeviceNote[] = []
+  for (const p of ctx.peers) {
+    if (end <= p.addedAt || start > ctx.now) continue
+    if (p.status === 'other_account') {
+      if (running) notes.push({ id: p.id, name: p.name, kind: 'other_account' })
+      continue
+    }
+    const due = Math.min(end, ctx.now) - DEVICE_STALE_MS
+    if (p.through !== null && p.through >= due) continue
+    const kind: DeviceNote['kind'] = p.status === 'unsupported' || p.status === 'unauthorized'
+      ? p.status
+      : p.through === null ? 'unreachable' : 'stale'
+    notes.push({ id: p.id, name: p.name, kind, ...(p.through !== null ? { through: iso(p.through) } : {}) })
+  }
+  return notes
+}
+
+function peerPart(peerSpentUSD: number): { peerSpentUSD?: number } {
+  return peerSpentUSD > 0 ? { peerSpentUSD } : {}
+}
+
+function computeWeek(w: WeekWindow, readings: LimitReading[], events: LimitEvent[], calls: LimitCall[], ctx: PeerContext): WeekOut {
+  const now = ctx.now
   const running = w.start <= now && now < w.end
   const to = Math.min(w.end, now)
   const spend = spendIn(calls, w.start, to)
@@ -805,7 +1015,7 @@ function computeWeek(w: WeekWindow, readings: LimitReading[], events: LimitEvent
     usedPct = 100
     usedQuality = 'exact'
     fullWeekUSD = spendIn(calls, w.start, ranOut.at + 1).spentUSD
-    fullWeekQuality = 'exact'
+    fullWeekQuality = slotStraddles(ctx.slots, ranOut.at) ? 'estimated' : 'exact'
   } else if (inWeek.length > 0) {
     usedPct = Math.max(...inWeek.map(r => r.sevenDay!.pct))
     const last = inWeek[inWeek.length - 1]!
@@ -826,7 +1036,11 @@ function computeWeek(w: WeekWindow, readings: LimitReading[], events: LimitEvent
     DAY_MS,
     now,
     ranOut?.at ?? null,
-  ).map(d => ({ start: iso(d.start), end: iso(d.end), spentUSD: d.spentUSD, tokens: d.tokens, usedPct: d.pct }))
+  ).map(d => ({ start: iso(d.start), end: iso(d.end), spentUSD: d.spentUSD, tokens: d.tokens, usedPct: d.pct, ...peerPart(d.peerSpentUSD) }))
+  const deviceNotes = notesFor(ctx, w.start, w.end, running)
+  const spentLowerBound = deviceNotes.some(n => n.kind !== 'other_account')
+  if (spentLowerBound && fullWeekUSD !== undefined) fullWeekQuality = 'lowerBound'
+  const devices = deviceSplit(spend, ctx.localName)
   return {
     start: iso(w.start),
     end: iso(w.end),
@@ -844,6 +1058,9 @@ function computeWeek(w: WeekWindow, readings: LimitReading[], events: LimitEvent
     models: modelsIn(calls, w.start, to),
     days,
     sessions: [],
+    ...(devices ? { devices } : {}),
+    ...(deviceNotes.length > 0 ? { deviceNotes } : {}),
+    ...(spentLowerBound ? { spentLowerBound } : {}),
   }
 }
 
@@ -856,18 +1073,22 @@ function previousAtSamePoint(
   events: LimitEvent[],
   calls: LimitCall[],
   callTimes: number[],
-  now: number,
+  ctx: PeerContext,
 ): WeekOut['previousAtSamePoint'] {
-  const at = previous.start + (now - current.start)
+  const at = previous.start + (ctx.now - current.start)
   if (at >= previous.end) return undefined
-  const spentUSD = spendIn(calls, previous.start, at + 1).spentUSD
+  const spend = spendIn(calls, previous.start, at + 1)
+  const spentUSD = spend.spentUSD
+  const devices = deviceSplit(spend, ctx.localName)
+  const split = devices ? { devices } : {}
   const ranOut = events.find(e => e.limit === 'seven_day' && e.at >= previous.start && e.at <= at)
-  if (ranOut) return { at: iso(at), spentUSD, usedPct: 100, usedQuality: 'exact' }
+  if (ranOut) return { at: iso(at), spentUSD, usedPct: 100, usedQuality: 'exact', ...split }
   const inWeek = readings.filter(r => r.sevenDay && windowKey(r.sevenDay.resetsAt) === previous.key && r.at >= previous.start && r.at <= at)
-  if (inWeek.length === 0) return { at: iso(at), spentUSD, usedPct: null, usedQuality: 'unknown' }
+  if (inWeek.length === 0) return { at: iso(at), spentUSD, usedPct: null, usedQuality: 'unknown', ...split }
   const last = inWeek[inWeek.length - 1]!
   const lastCall = prevBefore(callTimes, at + 1)
   return {
+    ...split,
     at: iso(at),
     spentUSD,
     usedPct: Math.max(...inWeek.map(r => r.sevenDay!.pct)),

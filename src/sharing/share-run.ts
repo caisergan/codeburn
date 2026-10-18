@@ -8,6 +8,7 @@ import { promptYesNo } from './prompt.js'
 import { sanitizeForSharing } from './sanitize.js'
 import { getSharingDir, loadPeers, savePeers } from './store.js'
 import { loadPricing } from '../models.js'
+import { buildClaudeLimitsShare } from './claude-limits-share.js'
 import { buildMenubarPayloadForRange } from '../usage-aggregator.js'
 import { periodInfoFromQuery } from '../cli-date.js'
 
@@ -40,6 +41,7 @@ export async function runShareServer(opts: { port: number; pair: boolean; always
     identity,
     peers,
     getUsage,
+    getClaudeLimits: buildClaudeLimitsShare,
     onPaired: () => {
       void savePeers(peers.list(), dir)
     },

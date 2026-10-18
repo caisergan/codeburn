@@ -212,6 +212,10 @@ describe('codeburn serve --stdio', () => {
     expect(report.readingsThrough).toBe(at)
     expect(report.plan).toBe('Max 5x')
     expect(await request(362, ['limits', '--format', 'json', '--period', 'today'])).toMatchObject({ ok: false, refused: true })
+    // `--devices` is allowed; with nothing paired there is nothing to ask.
+    const withDevices = await request(363, ['limits', '--format', 'json', '--devices'])
+    expect(withDevices).toMatchObject({ ok: true })
+    expect((JSON.parse(withDevices['output'] as string) as { devices: unknown[] }).devices).toEqual([])
   }, 60_000)
 
   it('refuses commands outside the read allowlist', async () => {

@@ -3,6 +3,7 @@ import { randomUUID } from 'crypto'
 import { loadOrCreateIdentity, type Identity } from './identity.js'
 import { PeerStore } from './pairing.js'
 import { ShareServer, type PairRequest, type UsageQuery } from './share-server.js'
+import { buildClaudeLimitsShare } from './claude-limits-share.js'
 import { advertise } from './discovery.js'
 import { getSharingDir, loadPeers, savePeers } from './store.js'
 
@@ -61,6 +62,7 @@ export class ShareController {
       identity,
       peers: this.peers,
       getUsage: this.getUsage,
+      getClaudeLimits: buildClaudeLimitsShare,
       onPaired: () => {
         if (this.peers) void savePeers(this.peers.list(), this.dir)
       },

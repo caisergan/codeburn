@@ -32,7 +32,11 @@ enum ClaudeSessionFormat {
 
     static func estimatedMoney(_ usd: Double?, _ quality: Quality, symbol: String, rate: Double) -> String {
         guard let usd, quality.isKnown else { return unknownMark }
-        let mark = quality == .exact || quality == .measured ? "" : "≈ "
+        let mark = switch quality {
+        case .exact, .measured, .unknown: ""
+        case .lowerBound: "≥ "
+        case .estimated: "≈ "
+        }
         return mark + money(usd, symbol: symbol, rate: rate)
     }
 
@@ -156,7 +160,7 @@ enum ClaudeSessionFormat {
             return L(
                 "%1$@ · %2$@ · %3$@ of week",
                 percent(session.fiveHourPct, session.fiveHourQuality),
-                money(session.spentUSD, unpriced: !session.unpricedModels.isEmpty, symbol: symbol, rate: rate),
+                money(session.spentUSD, unpriced: session.spendIsLowerBound, symbol: symbol, rate: rate),
                 percent(session.weekPct, session.weekQuality, signed: true)
             )
         }
@@ -175,7 +179,7 @@ enum ClaudeSessionFormat {
         return L(
             "5h %1$@ · %2$@ · wk %3$@",
             percent(session.fiveHourPct, session.fiveHourQuality),
-            money(session.spentUSD, unpriced: !session.unpricedModels.isEmpty, symbol: symbol, rate: rate),
+            money(session.spentUSD, unpriced: session.spendIsLowerBound, symbol: symbol, rate: rate),
             percent(session.weekPct, session.weekQuality, signed: true)
         )
     }

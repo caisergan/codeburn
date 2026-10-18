@@ -101,10 +101,13 @@ struct DataClient {
         }
     }
 
-    static let claudeLimitsSubcommand = ["limits", "--format", "json"]
+    /// `--devices` asks paired devices for their latest Claude spend first;
+    /// with none paired it costs nothing.
+    static let claudeLimitsSubcommand = ["limits", "--format", "json", "--devices"]
 
-    /// Claude 5-hour sessions and weeks (`codeburn limits`). Read-only and
-    /// network-free on the CLI side; it reads the reading log this app writes.
+    /// Claude 5-hour sessions and weeks (`codeburn limits`). Read-only; it
+    /// reads the reading log this app writes, and the network only to reach
+    /// paired devices.
     static func fetchClaudeLimits(
         qualityOfService: QualityOfService = .utility
     ) async throws -> ClaudeLimitsReport {

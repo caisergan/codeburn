@@ -16,6 +16,10 @@ export type ShareServerOptions = {
   identity: Identity
   peers: PeerStore
   getUsage: (query: UsageQuery) => Promise<unknown>
+  // Claude spend in 10-minute slots and limit hits since a time (ms), for the
+  // host's Claude sessions view. Absent on builds that do not send it: the
+  // route then answers 404, which the host reads as "unsupported".
+  getClaudeLimits?: (sinceMs: number | undefined) => Promise<unknown>
   // Called after a successful pairing so the caller can persist the peer list.
   onPaired?: () => void
   // Enables the interactive approve flow (POST /api/peer/pair-request): return
@@ -176,6 +180,19 @@ export class ShareServer {
         to: url.searchParams.get('to') ?? undefined,
       })
       json(200, payload)
+      return
+    }
+
+    if (url.pathname === '/api/claude-limits' && req.method === 'GET' && this.opts.getClaudeLimits) {
+      const clientFp = this.clientFingerprint(req)
+      const token = (req.headers['authorization'] ?? '').replace(/^Bearer\s+/i, '')
+      if (!clientFp || !token || !this.opts.peers.authorize(token, clientFp)) {
+        json(401, { error: 'unauthorized' })
+        return
+      }
+      const since = url.searchParams.get('since')
+      const sinceMs = since ? Date.parse(since) : undefined
+      json(200, await this.opts.getClaudeLimits(sinceMs !== undefined && Number.isFinite(sinceMs) ? sinceMs : undefined))
       return
     }
 
