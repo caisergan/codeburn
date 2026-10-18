@@ -850,3 +850,14 @@
 /* Claude › Plan: spend a session carried past midnight into the next day */
 "%1$@ after midnight from %2$@ session" = "%1$@ after midnight from %2$@ session";
 "into %@" = "into %@";
+/* Claude sessions: paired devices */
+"This Mac" = "This Mac";
+"devices" = "devices";
+"other device" = "other device";
+"no chat names" = "no chat names";
+"%1$@ last synced %2$@ · its spend after that is missing" = "%1$@ last synced %2$@ · its spend after that is missing";
+"%@ has not synced yet, so its spend is missing" = "%@ has not synced yet, so its spend is missing";
+"%@ runs an older CodeBurn, so its spend is missing. Update it to count it." = "%@ runs an older CodeBurn, so its spend is missing. Update it to count it.";
+"%@ no longer accepts this Mac, so its spend is missing. Pair it again." = "%@ no longer accepts this Mac, so its spend is missing. Pair it again.";
+"%@ is on another Claude account, so it is not counted here" = "%@ is on another Claude account, so it is not counted here";
+"Used outside your devices: the 5-hour limit rose while they spent almost nothing" = "Used outside your devices: the 5-hour limit rose while they spent almost nothing";

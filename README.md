@@ -127,7 +127,7 @@ Tell CodeBurn which subscription you pay for and it stops showing only what you 
 
 `codeburn quota` reads the live limits out of the tools you are already signed in to. That is where the five-hour and weekly windows come from. Check it before a long run.
 
-`codeburn limits` puts dollars on Claude's windows: what each 5-hour session and each week cost at API prices, and how much of your week a full session uses. The menu bar shows the same thing in Claude › Plan.
+`codeburn limits` puts dollars on Claude's windows: what each 5-hour session and each week cost at API prices, and how much of your week a full session uses. The menu bar shows the same thing in Claude › Plan. If you pair another machine on the same Claude account (`codeburn share --pair` there, `codeburn devices add` here), `codeburn limits --devices` adds its spend to each session and week, without its chat names or prompts.
 
 Guard is opt-in and local. `codeburn guard install` adds Claude Code hooks that warn a session once it passes $5 and stop it at $15. Both numbers are yours to change, `codeburn guard status` shows where the hooks live, and `codeburn guard uninstall` takes them out again.
 

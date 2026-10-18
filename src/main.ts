@@ -3357,13 +3357,14 @@ program
 
 program
   .command('limits')
-  .description('Claude 5-hour sessions and weeks: spend at API prices against limit use (reads the menubar\'s limit readings; makes no network calls)')
+  .description('Claude 5-hour sessions and weeks: spend at API prices against limit use (reads the menubar\'s limit readings; no network calls without --devices)')
   .option('--format <format>', 'Output format: table, json', 'table')
+  .option('--devices', 'First fetch the latest Claude spend from paired devices (network); otherwise their cached data is used')
   .action(async (opts) => {
     assertFormat(opts.format, ['table', 'json'], 'limits')
     const { buildLimitsReport, renderLimitsTable } = await import('./claude-limits-report.js')
     await loadPricing()
-    const report = await buildLimitsReport()
+    const report = await buildLimitsReport(new Date(), { devices: !!opts.devices })
     if (opts.format === 'json') {
       process.stdout.write(JSON.stringify(report, null, 2) + '\n')
       return

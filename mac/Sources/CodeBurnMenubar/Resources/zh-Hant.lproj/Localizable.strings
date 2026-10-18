@@ -839,3 +839,14 @@
 /* Claude › Plan: spend a session carried past midnight into the next day */
 "%1$@ after midnight from %2$@ session" = "%2$@ 會話在午夜後 %1$@";
 "into %@" = "延續至%@";
+/* Claude sessions: paired devices */
+"This Mac" = "此 Mac";
+"devices" = "裝置";
+"other device" = "其他裝置";
+"no chat names" = "無對話名稱";
+"%1$@ last synced %2$@ · its spend after that is missing" = "%1$@ 上次同步於 %2$@ · 之後的支出缺失";
+"%@ has not synced yet, so its spend is missing" = "%@ 尚未同步，因此缺少其支出";
+"%@ runs an older CodeBurn, so its spend is missing. Update it to count it." = "%@ 執行的是舊版 CodeBurn，因此缺少其支出。更新後即可計入。";
+"%@ no longer accepts this Mac, so its spend is missing. Pair it again." = "%@ 不再接受此 Mac，因此缺少其支出。請重新配對。";
+"%@ is on another Claude account, so it is not counted here" = "%@ 使用的是另一個 Claude 帳戶，因此不計入此處";
+"Used outside your devices: the 5-hour limit rose while they spent almost nothing" = "在您的裝置之外使用：這些裝置幾乎沒有支出，5 小時限額卻上升了";

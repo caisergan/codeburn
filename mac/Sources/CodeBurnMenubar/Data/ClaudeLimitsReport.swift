@@ -48,6 +48,12 @@ struct ClaudeLimitsReport: Decodable, Equatable, Sendable {
         let text: String
     }
 
+    /// A paired device, as it names itself.
+    struct DeviceRef: Decodable, Equatable, Sendable, Hashable {
+        let id: String
+        let name: String
+    }
+
     struct Chat: Decodable, Equatable, Sendable, Identifiable {
         let sessionId: String
         let title: String
@@ -60,6 +66,8 @@ struct ClaudeLimitsReport: Decodable, Equatable, Sendable {
         let promptCount: Int?
         /// The first prompts typed in this session; `promptCount` counts all.
         let prompts: [Prompt]?
+        /// Set on a paired device's spend, which has no chat detail.
+        var device: DeviceRef? = nil
         var id: String { sessionId }
     }
 
@@ -67,7 +75,43 @@ struct ClaudeLimitsReport: Decodable, Equatable, Sendable {
         let model: String
         let spentUSD: Double
         let tokens: Double
+        /// The part paired devices spent.
+        var peerSpentUSD: Double? = nil
         var id: String { model }
+    }
+
+    /// A window's spend on one device, this one first.
+    struct DeviceSpend: Decodable, Equatable, Sendable, Identifiable {
+        let id: String
+        let name: String
+        let local: Bool
+        let spentUSD: Double
+    }
+
+    /// A paired device whose spend a window leaves out, and why.
+    struct DeviceNote: Decodable, Equatable, Sendable, Hashable {
+        enum Kind: String, Decodable, Sendable {
+            case stale, unreachable, unsupported, unauthorized, otherAccount = "other_account"
+
+            init(from decoder: Decoder) throws {
+                let raw = try decoder.singleValueContainer().decode(String.self)
+                self = Kind(rawValue: raw) ?? .unreachable
+            }
+        }
+
+        let id: String
+        let name: String
+        let kind: Kind
+        let through: Date?
+    }
+
+    struct Device: Decodable, Equatable, Sendable, Identifiable {
+        let id: String
+        let name: String
+        let status: String
+        let through: Date?
+        let lastCallAt: Date?
+        let lastSyncedAt: Date?
     }
 
     /// One slice of a session (an hour) or of a week (24 hours from its
@@ -79,16 +123,19 @@ struct ClaudeLimitsReport: Decodable, Equatable, Sendable {
         let spentUSD: Double
         let tokens: Double
         let pct: Double?
+        /// The part paired devices spent; zero when none did.
+        let peerSpentUSD: Double
         var id: Date { start }
 
-        private enum CodingKeys: String, CodingKey { case start, end, spentUSD, tokens, fiveHourPct, usedPct }
+        private enum CodingKeys: String, CodingKey { case start, end, spentUSD, tokens, fiveHourPct, usedPct, peerSpentUSD }
 
-        init(start: Date, end: Date, spentUSD: Double, tokens: Double, pct: Double?) {
+        init(start: Date, end: Date, spentUSD: Double, tokens: Double, pct: Double?, peerSpentUSD: Double = 0) {
             self.start = start
             self.end = end
             self.spentUSD = spentUSD
             self.tokens = tokens
             self.pct = pct
+            self.peerSpentUSD = peerSpentUSD
         }
 
         init(from decoder: Decoder) throws {
@@ -98,6 +145,7 @@ struct ClaudeLimitsReport: Decodable, Equatable, Sendable {
             spentUSD = try c.decode(Double.self, forKey: .spentUSD)
             tokens = try c.decode(Double.self, forKey: .tokens)
             pct = try c.decodeIfPresent(Double.self, forKey: .fiveHourPct) ?? c.decodeIfPresent(Double.self, forKey: .usedPct)
+            peerSpentUSD = try c.decodeIfPresent(Double.self, forKey: .peerSpentUSD) ?? 0
         }
     }
 
@@ -117,6 +165,7 @@ struct ClaudeLimitsReport: Decodable, Equatable, Sendable {
         let spentUSD: Double
         let usedPct: Double?
         let usedQuality: Quality
+        var devices: [DeviceSpend]? = nil
     }
 
     struct RanOut: Decodable, Equatable, Sendable {
@@ -124,6 +173,8 @@ struct ClaudeLimitsReport: Decodable, Equatable, Sendable {
         let limit: Limit
         let at: Date
         let spentUSD: Double
+        /// A paired device's 10-minute slot straddles the refusal.
+        var approximate: Bool? = nil
     }
 
     struct Gap: Decodable, Equatable, Sendable {
@@ -171,6 +222,14 @@ struct ClaudeLimitsReport: Decodable, Equatable, Sendable {
         let hours: [Slice]?
         /// Missing when the session stays inside one day, and from older CLIs.
         let afterMidnight: AfterMidnight?
+        /// Set when a paired device spent in this session.
+        var devices: [DeviceSpend]? = nil
+        var deviceNotes: [DeviceNote]? = nil
+        var spentLowerBound: Bool? = nil
+
+        /// Spend that leaves something out: an unpriced model or a paired
+        /// device's missing data. Shown as `≥ $X`.
+        var spendIsLowerBound: Bool { !unpricedModels.isEmpty || spentLowerBound == true }
     }
 
     struct Week: Decodable, Equatable, Sendable, Identifiable {
@@ -202,8 +261,12 @@ struct ClaudeLimitsReport: Decodable, Equatable, Sendable {
         /// Oldest first.
         let sessions: [WeekSession]?
         let previousAtSamePoint: SamePoint?
+        var devices: [DeviceSpend]? = nil
+        var deviceNotes: [DeviceNote]? = nil
+        var spentLowerBound: Bool? = nil
 
         var id: Date { start }
+        var spendIsLowerBound: Bool { !unpricedModels.isEmpty || spentLowerBound == true }
     }
 
     struct FullWeekAverage: Decodable, Equatable, Sendable {
@@ -234,6 +297,16 @@ struct ClaudeLimitsReport: Decodable, Equatable, Sendable {
     let sessions: [Session]
     let weeks: [Week]
     let gaps: [Gap]
+    /// Paired devices; missing from CLIs older than device support.
+    var devices: [Device]? = nil
+
+    /// The newest Claude call any paired device reported: Claude counts as
+    /// working while it is recent, like a local transcript write.
+    var latestDeviceCallAt: Date? {
+        (devices ?? []).compactMap(\.lastCallAt).max()
+    }
+
+    var hasPairedDevices: Bool { !(devices ?? []).isEmpty }
 
     /// A full 5-hour session as a share of the week, in percent.
     var fullSessionWeekShare: Double? {

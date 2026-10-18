@@ -20,7 +20,7 @@ struct ClaudeSessionDay: Equatable {
     let carryOver: CarryOver?
 
     var spentUSD: Double { sessions.reduce(0) { $0 + $1.spentUSD } }
-    var unpriced: Bool { sessions.contains { !$0.unpricedModels.isEmpty } }
+    var unpriced: Bool { sessions.contains { $0.spendIsLowerBound } }
 
     /// Below this a carry-over shows as "+$0", so it is left out.
     static let minimumCarryOverUSD = 0.5

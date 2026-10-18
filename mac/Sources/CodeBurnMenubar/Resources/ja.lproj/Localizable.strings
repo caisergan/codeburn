@@ -843,3 +843,14 @@
 /* Claude › Plan: spend a session carried past midnight into the next day */
 "%1$@ after midnight from %2$@ session" = "%2$@のセッションから0時以降に%1$@";
 "into %@" = "%@まで";
+/* Claude sessions: paired devices */
+"This Mac" = "このMac";
+"devices" = "デバイス";
+"other device" = "別のデバイス";
+"no chat names" = "チャット名なし";
+"%1$@ last synced %2$@ · its spend after that is missing" = "%1$@ の最終同期は %2$@ · それ以降の支出は含まれていません";
+"%@ has not synced yet, so its spend is missing" = "%@ はまだ同期されていないため、支出が含まれていません";
+"%@ runs an older CodeBurn, so its spend is missing. Update it to count it." = "%@ は古い CodeBurn を使っているため、支出が含まれていません。更新すると集計されます。";
+"%@ no longer accepts this Mac, so its spend is missing. Pair it again." = "%@ がこのMacを受け付けなくなったため、支出が含まれていません。もう一度ペアリングしてください。";
+"%@ is on another Claude account, so it is not counted here" = "%@ は別の Claude アカウントのため、ここでは集計されません";
+"Used outside your devices: the 5-hour limit rose while they spent almost nothing" = "お使いのデバイス以外で使用: デバイスの支出がほぼないのに5時間の上限が増えました";

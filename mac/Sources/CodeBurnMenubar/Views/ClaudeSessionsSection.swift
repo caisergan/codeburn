@@ -38,6 +38,95 @@ private func estimatedMoney(_ usd: Double?, _ quality: ClaudeLimitsReport.Qualit
     ClaudeSessionFormat.estimatedMoney(usd, quality, symbol: CurrencyState.shared.symbol, rate: CurrencyState.shared.rate)
 }
 
+/// "This Mac" for this device's share of a window, else the device's name.
+private func deviceLabel(_ device: ClaudeLimitsReport.DeviceSpend) -> String {
+    device.local ? L("This Mac") : device.name
+}
+
+/// "This Mac $6 · instance-… $3".
+@MainActor
+private func deviceSplitText(_ devices: [ClaudeLimitsReport.DeviceSpend], cents: Bool = false) -> String {
+    devices.map { "\(deviceLabel($0)) \(money($0.spentUSD, cents: cents))" }.joined(separator: " · ")
+}
+
+/// Why a window leaves a paired device's spend out: a warning, except for a
+/// device on another account, which is only named.
+private func deviceNoteText(_ note: ClaudeLimitsReport.DeviceNote) -> String {
+    switch note.kind {
+    case .stale:
+        let through = note.through.map { ClaudeSessionFormat.clock($0) } ?? ClaudeSessionFormat.unknownMark
+        return L("%1$@ last synced %2$@ · its spend after that is missing", note.name, through)
+    case .unreachable:
+        return L("%@ has not synced yet, so its spend is missing", note.name)
+    case .unsupported:
+        return L("%@ runs an older CodeBurn, so its spend is missing. Update it to count it.", note.name)
+    case .unauthorized:
+        return L("%@ no longer accepts this Mac, so its spend is missing. Pair it again.", note.name)
+    case .otherAccount:
+        return L("%@ is on another Claude account, so it is not counted here", note.name)
+    }
+}
+
+/// The money a limit ran out after: `≈` when a paired device's 10-minute
+/// slot straddles the moment.
+@MainActor
+private func ranOutMoney(_ ranOut: ClaudeLimitsReport.RanOut) -> String {
+    (ranOut.approximate == true ? "≈ " : "") + money(ranOut.spentUSD, cents: true)
+}
+
+/// A small mark after an amount a paired device spent part of.
+private struct DeviceDot: View {
+    var body: some View {
+        Circle()
+            .fill(Theme.pairedDevice)
+            .frame(width: 4, height: 4)
+            .accessibilityHidden(true)
+    }
+}
+
+/// A thin bar of each device's share of a window, and the amounts under it.
+private struct DeviceSplit: View {
+    let devices: [ClaudeLimitsReport.DeviceSpend]
+
+    var body: some View {
+        let total = max(devices.reduce(0) { $0 + $1.spentUSD }, 0.000_001)
+        VStack(alignment: .leading, spacing: 4) {
+            GeometryReader { geo in
+                HStack(spacing: 1) {
+                    ForEach(devices) { device in
+                        Rectangle()
+                            .fill(device.local ? Theme.brandAccent : Theme.pairedDevice)
+                            .frame(width: max(1, (geo.size.width - CGFloat(devices.count - 1)) * device.spentUSD / total))
+                    }
+                }
+            }
+            .frame(height: 4)
+            .clipShape(Capsule())
+            HStack(spacing: 8) {
+                ForEach(devices) { device in
+                    HStack(spacing: 4) {
+                        RoundedRectangle(cornerRadius: 2)
+                            .fill(device.local ? Theme.brandAccent : Theme.pairedDevice)
+                            .frame(width: 7, height: 7)
+                        Text(deviceLabel(device))
+                            .foregroundStyle(.secondary)
+                            .lineLimit(1)
+                            .truncationMode(.middle)
+                        Text(money(device.spentUSD))
+                            .font(.codeMono(size: 9.5, weight: .semibold))
+                            .foregroundStyle(.primary)
+                            .fixedSize()
+                    }
+                }
+            }
+            .font(.system(size: 9.5, weight: .medium))
+            .monospacedDigit()
+        }
+        .accessibilityElement(children: .ignore)
+        .accessibilityLabel(deviceSplitText(devices))
+    }
+}
+
 // MARK: - Spend lines under the bars
 
 /// "$116 so far · 375M tokens · +8% of your week · full ≈ $190" under the
@@ -57,7 +146,7 @@ struct ClaudeSessionSpendLine: View {
 
     private var text: String {
         var parts = [
-            L("%@ so far", money(session.spentUSD, unpriced: !session.unpricedModels.isEmpty)),
+            L("%@ so far", money(session.spentUSD, unpriced: session.spendIsLowerBound)),
             L("%@ tokens", ClaudeSessionFormat.tokens(session.tokens.total)),
         ]
         if session.weekQuality.isKnown {
@@ -85,7 +174,7 @@ struct ClaudeWeekSpendLine: View {
     }
 
     private var text: String {
-        var parts = [L("%@ so far", money(week.spentUSD, unpriced: !week.unpricedModels.isEmpty))]
+        var parts = [L("%@ so far", money(week.spentUSD, unpriced: week.spendIsLowerBound))]
         if let full = week.fullWeekUSD, week.fullWeekQuality.isKnown {
             parts.append(L("full week %@", estimatedMoney(full, week.fullWeekQuality)))
         }
@@ -331,6 +420,8 @@ private struct ShareRow: View {
     /// 0...1.
     let share: Double
     var dim = false
+    /// 0...share: the part paired devices spent, drawn after this Mac's.
+    var peerShare: Double = 0
 
     var body: some View {
         HStack(spacing: 6) {
@@ -359,9 +450,19 @@ private struct ShareRow: View {
         .padding(.vertical, 3)
         .background(alignment: .leading) {
             GeometryReader { geo in
-                RoundedRectangle(cornerRadius: 4)
-                    .fill(dim ? Color.primary.opacity(0.05) : Theme.brandAccent.opacity(0.16))
-                    .frame(width: geo.size.width * min(max(share, 0), 1))
+                let whole = min(max(share, 0), 1)
+                let peer = min(max(peerShare, 0), whole)
+                HStack(spacing: 0) {
+                    Rectangle()
+                        .fill(dim ? Color.primary.opacity(0.05) : Theme.brandAccent.opacity(0.16))
+                        .frame(width: geo.size.width * (whole - peer))
+                    if peer > 0 {
+                        Rectangle()
+                            .fill(Theme.pairedDevice.opacity(0.22))
+                            .frame(width: geo.size.width * peer)
+                    }
+                }
+                .clipShape(RoundedRectangle(cornerRadius: 4))
             }
         }
         .padding(.horizontal, -Columns.bleed)
@@ -428,6 +529,8 @@ private struct ClaudeSliceChart: View {
     let nowFraction: Double?
     let spendLegend: String
     let lineLegend: String
+    /// Names the stacked part paired devices spent, when any did.
+    var deviceLegend: String? = nil
 
     @State private var hovered: Int?
 
@@ -461,6 +564,12 @@ private struct ClaudeSliceChart: View {
                 HStack(spacing: 4) {
                     RoundedRectangle(cornerRadius: 1).fill(Color.primary.opacity(0.2)).frame(width: 8, height: 6)
                     Text(spendLegend)
+                }
+                if let deviceLegend {
+                    HStack(spacing: 4) {
+                        RoundedRectangle(cornerRadius: 1).fill(Theme.pairedDevice.opacity(0.75)).frame(width: 8, height: 6)
+                        Text(deviceLegend).lineLimit(1).truncationMode(.middle)
+                    }
                 }
                 HStack(spacing: 4) {
                     Capsule().fill(Theme.brandAccentLight).frame(width: 8, height: 2)
@@ -497,9 +606,19 @@ private struct ClaudeSliceChart: View {
                                 .foregroundStyle(.secondary)
                                 .lineLimit(1)
                                 .minimumScaleFactor(0.6)
-                            UnevenRoundedRectangle(topLeadingRadius: 2, topTrailingRadius: 2)
-                                .fill(fill(index: index))
-                                .frame(height: barHeight)
+                            let peer = min(max(slice.peerSpentUSD, 0), slice.spentUSD)
+                            let peerHeight = slice.spentUSD > 0 ? barHeight * peer / slice.spentUSD : 0
+                            VStack(spacing: 0) {
+                                if peerHeight > 0 {
+                                    Rectangle()
+                                        .fill(Theme.pairedDevice.opacity(hovered == index ? 0.95 : 0.75))
+                                        .frame(height: peerHeight)
+                                }
+                                Rectangle()
+                                    .fill(fill(index: index))
+                                    .frame(height: barHeight - peerHeight)
+                            }
+                            .clipShape(UnevenRoundedRectangle(topLeadingRadius: 2, topTrailingRadius: 2))
                         }
                     } else {
                         Hatch()
@@ -592,8 +711,11 @@ private struct ClaudeSliceChart: View {
 /// start) and its own percent.
 @MainActor
 private func sliceFigures(_ slice: ClaudeLimitsReport.Slice, previous: Double?) -> (String, String, String) {
-    (
-        money(slice.spentUSD),
+    let spent = slice.peerSpentUSD > 0
+        ? "\(money(slice.spentUSD)) (\(L("This Mac")) \(money(slice.spentUSD - slice.peerSpentUSD)) · \(L("devices")) \(money(slice.peerSpentUSD)))"
+        : money(slice.spentUSD)
+    return (
+        spent,
         ClaudeSessionFormat.percent(previous ?? 0, .measured),
         ClaudeSessionFormat.percent(slice.pct, slice.pct == nil ? .unknown : .measured)
     )
@@ -689,7 +811,7 @@ struct ClaudeSessionsList: View {
                     CarryOverLine(
                         carry: carry,
                         todayTotal: Calendar.current.isDateInToday(day.day) ? day.spentUSD + carry.spentUSD : nil,
-                        unpriced: day.unpriced || !carry.session.unpricedModels.isEmpty,
+                        unpriced: day.unpriced || carry.session.spendIsLowerBound,
                         isHighlighted: highlighted == carry.session.id,
                         hover: { hover(carry.session.id, inside: $0) },
                         open: { open(carry.session.id, shown: shown) }
@@ -712,7 +834,8 @@ struct ClaudeSessionsList: View {
                         },
                         tab: $tab,
                         carriesInto: carried.contains(session.id) ? session.afterMidnight?.at : nil,
-                        openChat: openChat
+                        openChat: openChat,
+                        pairedDevices: report.hasPairedDevices
                     )
                 }
             }
@@ -977,6 +1100,7 @@ private struct ClaudeSessionRow: View {
     /// The next day, when the list shows what this session spent in it.
     var carriesInto: Date? = nil
     var openChat: String? = nil
+    var pairedDevices = false
 
     var body: some View {
         VStack(alignment: .leading, spacing: 0) {
@@ -1011,9 +1135,13 @@ private struct ClaudeSessionRow: View {
                     }
                     .lineLimit(1)
                     Spacer(minLength: 4)
-                    Text(money(session.spentUSD, unpriced: !session.unpricedModels.isEmpty))
+                    Text(money(session.spentUSD, unpriced: session.spendIsLowerBound))
                         .foregroundStyle(.primary)
                         .frame(width: Columns.spent, alignment: .trailing)
+                        // In the gap before the meter, so the columns stay put.
+                        .overlay(alignment: .trailing) {
+                            if session.devices != nil { DeviceDot().offset(x: 5) }
+                        }
                     Meter(percent: session.fiveHourQuality.isKnown ? session.fiveHourPct : nil, hot: (session.fiveHourPct ?? 0) >= 90)
                         .frame(width: Columns.meter, height: 4)
                         .padding(.leading, Columns.meterGap)
@@ -1037,7 +1165,7 @@ private struct ClaudeSessionRow: View {
             .accessibilityHint(isOpen ? L("Hides session details") : L("Shows session details"))
 
             if isOpen {
-                ClaudeSessionDetail(session: session, tab: $tab, openChat: openChat)
+                ClaudeSessionDetail(session: session, tab: $tab, openChat: openChat, pairedDevices: pairedDevices)
                     .padding(.leading, 23)
                     .padding(.trailing, 10)
                     .padding(.top, 8)
@@ -1064,7 +1192,7 @@ private struct ClaudeSessionRow: View {
     private var accessibilityText: String {
         var parts = [
             ClaudeSessionFormat.sessionRange(start: session.start, end: session.end, inferred: session.startInferred),
-            L("spent %@", money(session.spentUSD, unpriced: !session.unpricedModels.isEmpty)),
+            L("spent %@", money(session.spentUSD, unpriced: session.spendIsLowerBound)) + (session.devices.map { " (\(deviceSplitText($0)))" } ?? ""),
             L("5-hour used %1$@, %2$@", ClaudeSessionFormat.percent(session.fiveHourPct, session.fiveHourQuality), session.fiveHourQuality.spoken),
             L("Week used %1$@, %2$@", ClaudeSessionFormat.percent(session.weekPct, session.weekQuality, signed: true), session.weekQuality.spoken),
         ]
@@ -1082,14 +1210,19 @@ private struct ClaudeSessionDetail: View {
     private static let chatRows = 3
     private static let modelRows = 4
 
+    /// Whether this Mac has paired devices: "used outside" then means
+    /// outside all of them.
+    let pairedDevices: Bool
+
     /// One chat open at a time, showing its prompts.
     @State private var openChat: String?
     @State private var allChats = false
 
-    init(session: ClaudeLimitsReport.Session, tab: Binding<ClaudeSessionDetailTab>, openChat: String? = nil) {
+    init(session: ClaudeLimitsReport.Session, tab: Binding<ClaudeSessionDetailTab>, openChat: String? = nil, pairedDevices: Bool = false) {
         self.session = session
         self._tab = tab
         self._openChat = State(initialValue: openChat)
+        self.pairedDevices = pairedDevices
     }
 
     var body: some View {
@@ -1104,6 +1237,10 @@ private struct ClaudeSessionDetail: View {
                     tabs
                     meta
                 }
+            }
+
+            if let devices = session.devices {
+                DeviceSplit(devices: devices)
             }
 
             switch shownTab {
@@ -1165,16 +1302,20 @@ private struct ClaudeSessionDetail: View {
             let shown = allChats ? session.chats[...] : session.chats.prefix(Self.chatRows)
             VStack(alignment: .leading, spacing: 2) {
                 ForEach(shown) { chat in
-                    ClaudeChatRow(
-                        chat: chat,
-                        share: share(chat.spentUSD),
-                        isOpen: openChat == chat.id,
-                        toggle: {
-                            withAnimation(.spring(response: 0.3, dampingFraction: 0.85)) {
-                                openChat = openChat == chat.id ? nil : chat.id
+                    if chat.device != nil {
+                        ClaudeDeviceChatRow(chat: chat, share: share(chat.spentUSD))
+                    } else {
+                        ClaudeChatRow(
+                            chat: chat,
+                            share: share(chat.spentUSD),
+                            isOpen: openChat == chat.id,
+                            toggle: {
+                                withAnimation(.spring(response: 0.3, dampingFraction: 0.85)) {
+                                    openChat = openChat == chat.id ? nil : chat.id
+                                }
                             }
-                        }
-                    )
+                        )
+                    }
                 }
                 if session.chats.count > shown.count {
                     let rest = session.chats.dropFirst(shown.count)
@@ -1215,8 +1356,9 @@ private struct ClaudeSessionDetail: View {
                 end: ClaudeSessionFormat.clock(session.end)
             ),
             nowFraction: session.running ? fraction(of: Date(), from: session.start, to: session.end) : nil,
-            spendLegend: L("spend per hour"),
-            lineLegend: L("5-hour used → %@", ClaudeSessionFormat.percent(session.fiveHourPct, session.fiveHourQuality))
+            spendLegend: session.devices == nil ? L("spend per hour") : L("This Mac"),
+            lineLegend: L("5-hour used → %@", ClaudeSessionFormat.percent(session.fiveHourPct, session.fiveHourQuality)),
+            deviceLegend: devicesLegend(session.devices)
         )
     }
 
@@ -1225,7 +1367,7 @@ private struct ClaudeSessionDetail: View {
         let models = session.models ?? []
         VStack(alignment: .leading, spacing: 2) {
             ForEach(models.prefix(Self.modelRows)) { model in
-                ShareRow(title: model.model, detail: ClaudeSessionFormat.tokens(model.tokens), amount: money(model.spentUSD), share: share(model.spentUSD))
+                ShareRow(title: model.model, detail: ClaudeSessionFormat.tokens(model.tokens), amount: money(model.spentUSD), share: share(model.spentUSD), peerShare: share(model.peerSpentUSD ?? 0))
             }
             if models.count > Self.modelRows {
                 let rest = models.dropFirst(Self.modelRows)
@@ -1244,13 +1386,18 @@ private struct ClaudeSessionDetail: View {
         if let ranOut = session.ranOut {
             switch ranOut.limit {
             case .fiveHour:
-                out.append(L("Ran out at %1$@ after %2$@", ClaudeSessionFormat.clock(ranOut.at), money(ranOut.spentUSD, cents: true)))
+                out.append(L("Ran out at %1$@ after %2$@", ClaudeSessionFormat.clock(ranOut.at), ranOutMoney(ranOut)))
             case .sevenDay:
-                out.append(L("Week ran out at %1$@ after %2$@ this session", ClaudeSessionFormat.clock(ranOut.at), money(ranOut.spentUSD, cents: true)))
+                out.append(L("Week ran out at %1$@ after %2$@ this session", ClaudeSessionFormat.clock(ranOut.at), ranOutMoney(ranOut)))
             }
         }
         if session.outsideThisMac {
-            out.append(L("Used outside this Mac: the 5-hour limit rose while this Mac spent almost nothing"))
+            out.append(pairedDevices
+                ? L("Used outside your devices: the 5-hour limit rose while they spent almost nothing")
+                : L("Used outside this Mac: the 5-hour limit rose while this Mac spent almost nothing"))
+        }
+        for note in session.deviceNotes ?? [] where note.kind != .otherAccount {
+            out.append(deviceNoteText(note))
         }
         if let gap = session.gap {
             out.append(L(
@@ -1267,13 +1414,81 @@ private struct ClaudeSessionDetail: View {
     }
 
     private var notes: [String] {
-        guard let split = session.weekSplit else { return [] }
-        return [L(
+        var out = (session.deviceNotes ?? []).filter { $0.kind == .otherAccount }.map(deviceNoteText)
+        guard let split = session.weekSplit else { return out }
+        out.append(L(
             "The week reset at %1$@: %2$@ this week, %3$@ last week",
             ClaudeSessionFormat.clock(split.resetAt),
             ClaudeSessionFormat.percent(split.thisWeek, split.thisWeek == nil ? .unknown : .measured, signed: true),
             ClaudeSessionFormat.percent(split.lastWeek, split.lastWeek == nil ? .unknown : .measured, signed: true)
-        )]
+        ))
+        return out
+    }
+}
+
+/// The chart legend for paired devices' stacked spend: the device's name, or
+/// "devices" for several.
+private func devicesLegend(_ devices: [ClaudeLimitsReport.DeviceSpend]?) -> String? {
+    let peers = (devices ?? []).filter { !$0.local }
+    guard let first = peers.first else { return nil }
+    return peers.count == 1 ? first.name : L("devices")
+}
+
+/// A paired device's spend in a session: one line, no chat detail to open.
+private struct ClaudeDeviceChatRow: View {
+    let chat: ClaudeLimitsReport.Chat
+    /// 0...1 of the session's spend.
+    let share: Double
+
+    var body: some View {
+        VStack(alignment: .leading, spacing: 1) {
+            HStack(spacing: 6) {
+                Image(systemName: "server.rack")
+                    .font(.system(size: 9, weight: .semibold))
+                    .foregroundStyle(Theme.pairedDevice)
+                Text(chat.device?.name ?? chat.title)
+                    .font(.system(size: 10.5, weight: .semibold))
+                    .foregroundStyle(.primary)
+                    .lineLimit(1)
+                    .truncationMode(.middle)
+                Spacer(minLength: 4)
+                Text(money(chat.spentUSD))
+                    .font(.codeMono(size: 9.5, weight: .semibold))
+                    .foregroundStyle(.primary)
+                    .frame(minWidth: 34, alignment: .trailing)
+                Text("\(Int((share * 100).rounded()))%")
+                    .font(.codeMono(size: 9.5, weight: .medium))
+                    .foregroundStyle(.tertiary)
+                    .frame(width: 28, alignment: .trailing)
+            }
+            Text(detail)
+                .font(.system(size: 9, weight: .medium))
+                .foregroundStyle(.tertiary)
+                .lineLimit(1)
+        }
+        .monospacedDigit()
+        .padding(.horizontal, Columns.bleed)
+        .padding(.vertical, 3)
+        .background(alignment: .leading) {
+            GeometryReader { geo in
+                RoundedRectangle(cornerRadius: 4)
+                    .fill(Theme.pairedDevice.opacity(0.18))
+                    .frame(width: geo.size.width * min(max(share, 0), 1))
+            }
+        }
+        .padding(.horizontal, -Columns.bleed)
+        .accessibilityElement(children: .combine)
+    }
+
+    /// "other device · no chat names · 03:12–05:05".
+    private var detail: String {
+        var parts = [L("other device"), L("no chat names")]
+        if let first = chat.firstAt, let last = chat.lastAt {
+            let from = ClaudeSessionFormat.clock(first)
+            let to = ClaudeSessionFormat.clock(last)
+            parts.append(from == to ? from : "\(from)–\(to)")
+        }
+        return parts.joined(separator: " · ")
     }
 }
 
@@ -1549,8 +1764,22 @@ private struct ClaudeWeekComparison: View {
                 }
             }
             .font(.system(size: 9, weight: .semibold))
-            line(L("This week"), percent: week.usedPct, quality: week.usedQuality, spent: week.spentUSD, unpriced: !week.unpricedModels.isEmpty, current: true)
-            line(L("Last week"), percent: previous.usedPct, quality: previous.usedQuality, spent: previous.spentUSD, unpriced: false, current: false)
+            line(L("This week"), percent: week.usedPct, quality: week.usedQuality, spent: week.spentUSD, unpriced: week.spendIsLowerBound, current: true, devices: week.devices)
+            line(L("Last week"), percent: previous.usedPct, quality: previous.usedQuality, spent: previous.spentUSD, unpriced: false, current: false, devices: previous.devices)
+            if let devices = week.devices ?? previous.devices {
+                HStack(spacing: 8) {
+                    ForEach(devices) { device in
+                        HStack(spacing: 4) {
+                            RoundedRectangle(cornerRadius: 2)
+                                .fill(device.local ? Theme.brandAccentLight : Theme.pairedDevice)
+                                .frame(width: 7, height: 7)
+                            Text(deviceLabel(device)).lineLimit(1).truncationMode(.middle)
+                        }
+                    }
+                }
+                .font(.system(size: 9, weight: .medium))
+                .foregroundStyle(.secondary)
+            }
         }
         .padding(.horizontal, 9)
         .padding(.vertical, 7)
@@ -1565,7 +1794,7 @@ private struct ClaudeWeekComparison: View {
         return pct < 0 ? "−\(-pct)%" : "+\(pct)%"
     }
 
-    private func line(_ label: String, percent: Double?, quality: ClaudeLimitsReport.Quality, spent: Double, unpriced: Bool, current: Bool) -> some View {
+    private func line(_ label: String, percent: Double?, quality: ClaudeLimitsReport.Quality, spent: Double, unpriced: Bool, current: Bool, devices: [ClaudeLimitsReport.DeviceSpend]?) -> some View {
         HStack(spacing: 6) {
             Text(label)
                 .font(.system(size: 9.5, weight: .medium))
@@ -1577,9 +1806,20 @@ private struct ClaudeWeekComparison: View {
                 ZStack(alignment: .leading) {
                     Capsule().fill(Color.primary.opacity(0.06))
                     if let percent, quality.isKnown {
-                        Capsule()
-                            .fill(current ? AnyShapeStyle(Theme.brandAccentLight) : AnyShapeStyle(Color.primary.opacity(0.3)))
-                            .frame(width: geo.size.width * min(max(percent, 0), 100) / 100)
+                        // A paired device's part of the spend, as the same
+                        // part of the bar.
+                        let width = geo.size.width * min(max(percent, 0), 100) / 100
+                        let peer = (devices ?? []).filter { !$0.local }.reduce(0) { $0 + $1.spentUSD }
+                        let peerWidth = spent > 0 ? width * min(peer / spent, 1) : 0
+                        HStack(spacing: 0) {
+                            Rectangle()
+                                .fill(current ? AnyShapeStyle(Theme.brandAccentLight) : AnyShapeStyle(Color.primary.opacity(0.3)))
+                                .frame(width: width - peerWidth)
+                            if peerWidth > 0 {
+                                Rectangle().fill(Theme.pairedDevice).frame(width: peerWidth)
+                            }
+                        }
+                        .clipShape(Capsule())
                     }
                 }
             }
@@ -1622,9 +1862,12 @@ private struct ClaudeWeekRow: View {
                         }
                     }
                     Spacer(minLength: 4)
-                    Text(money(week.spentUSD, unpriced: !week.unpricedModels.isEmpty))
+                    Text(money(week.spentUSD, unpriced: week.spendIsLowerBound))
                         .foregroundStyle(.primary)
                         .frame(width: Columns.weekSpent, alignment: .trailing)
+                        .overlay(alignment: .trailing) {
+                            if week.devices != nil { DeviceDot().offset(x: 5) }
+                        }
                     ClaudeWeekMiniStrip(week: week)
                         .frame(width: Columns.weekStrip, height: 6)
                         .padding(.leading, Columns.meterGap)
@@ -1678,7 +1921,7 @@ private struct ClaudeWeekRow: View {
     private var accessibilityText: String {
         var parts = [
             label,
-            L("spent %@", money(week.spentUSD, unpriced: !week.unpricedModels.isEmpty)),
+            L("spent %@", money(week.spentUSD, unpriced: week.spendIsLowerBound)),
             L("Week used %1$@, %2$@", ClaudeSessionFormat.percent(week.usedPct, week.usedQuality), week.usedQuality.spoken),
         ]
         if week.ranOutAt != nil { parts.append(L("a limit ran out")) }
@@ -1741,6 +1984,10 @@ private struct ClaudeWeekDetail: View {
                     tabs
                     meta
                 }
+            }
+
+            if let devices = week.devices {
+                DeviceSplit(devices: devices)
             }
 
             switch shownTab {
@@ -1816,8 +2063,9 @@ private struct ClaudeWeekDetail: View {
             slots: slots,
             axis: .perSlot,
             nowFraction: week.running ? fraction(of: Date(), from: week.start, to: week.end) : nil,
-            spendLegend: L("spend per day"),
-            lineLegend: L("week used → %@", ClaudeSessionFormat.percent(week.usedPct, week.usedQuality))
+            spendLegend: week.devices == nil ? L("spend per day") : L("This Mac"),
+            lineLegend: L("week used → %@", ClaudeSessionFormat.percent(week.usedPct, week.usedQuality)),
+            deviceLegend: devicesLegend(week.devices)
         )
     }
 
@@ -1884,7 +2132,7 @@ private struct ClaudeWeekDetail: View {
         let models = week.models ?? []
         VStack(alignment: .leading, spacing: 2) {
             ForEach(models.prefix(Self.modelRows)) { model in
-                ShareRow(title: model.model, detail: ClaudeSessionFormat.tokens(model.tokens), amount: money(model.spentUSD), share: share(model.spentUSD))
+                ShareRow(title: model.model, detail: ClaudeSessionFormat.tokens(model.tokens), amount: money(model.spentUSD), share: share(model.spentUSD), peerShare: share(model.peerSpentUSD ?? 0))
             }
             if models.count > Self.modelRows {
                 let rest = models.dropFirst(Self.modelRows)
@@ -1899,12 +2147,18 @@ private struct ClaudeWeekDetail: View {
     }
 
     private var warnings: [String] {
-        guard let ranOut = week.ranOutAt else { return [] }
-        return [L("Ran out %@", ClaudeSessionFormat.weekdayClock(ranOut))]
+        var out: [String] = []
+        if let ranOut = week.ranOutAt {
+            out.append(L("Ran out %@", ClaudeSessionFormat.weekdayClock(ranOut)))
+        }
+        for note in week.deviceNotes ?? [] where note.kind != .otherAccount {
+            out.append(deviceNoteText(note))
+        }
+        return out
     }
 
     private var notes: [String] {
-        var out: [String] = []
+        var out = (week.deviceNotes ?? []).filter { $0.kind == .otherAccount }.map(deviceNoteText)
         if week.running {
             out.append(L("This week · since %@", ClaudeSessionFormat.weekdayClock(week.start)))
         }

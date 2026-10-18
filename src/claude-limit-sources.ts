@@ -5,11 +5,12 @@
 
 import { createReadStream } from 'fs'
 import { mkdir, open, readFile, readdir, rename, stat, unlink } from 'fs/promises'
-import { randomBytes } from 'crypto'
+import { createHash, randomBytes } from 'crypto'
+import { homedir } from 'os'
 import { join, resolve } from 'path'
 
 import { getCodeburnCacheDir } from './cache-dir.js'
-import type { FailedCheck, LimitCall, LimitEvent, LimitName, LimitPrompt, LimitReading } from './claude-limits.js'
+import type { FailedCheck, LimitCall, LimitEvent, LimitName, LimitPrompt, LimitReading, LimitSlot } from './claude-limits.js'
 import { findUnpricedModels, getShortModelName } from './models.js'
 import { redact } from './session-why.js'
 import type { ProjectSummary } from './types.js'
@@ -132,7 +133,7 @@ async function loadEventsCache(path: string): Promise<EventsCache> {
   return { version: EVENTS_CACHE_VERSION, files: {} }
 }
 
-async function writeFileAtomic(finalPath: string, payload: string): Promise<void> {
+export async function writeFileAtomic(finalPath: string, payload: string): Promise<void> {
   const tempPath = `${finalPath}.${randomBytes(8).toString('hex')}.tmp`
   const handle = await open(tempPath, 'w', 0o600)
   try {
@@ -423,4 +424,60 @@ function flattenLimitCalls(projects: ProjectSummary[], defaultClaudeDir: string 
   }
   prompts.sort((a, b) => a.at - b.at)
   return { calls: out, prompts }
+}
+
+// ---------------------------------------------------------------------------
+// Paired devices
+// ---------------------------------------------------------------------------
+
+const SLOT_MS = 10 * 60 * 1000
+
+/// This device's calls as 10-minute slots (UTC) per model: what a paired
+/// device is sent. Spend, tokens and times only; no chat, project or prompt.
+export function aggregateLimitSlots(calls: LimitCall[]): LimitSlot[] {
+  const slots = new Map<string, LimitSlot>()
+  for (const call of calls) {
+    if (call.device) continue
+    const at = Math.floor(call.at / SLOT_MS) * SLOT_MS
+    const key = `${at}|${call.model}`
+    let slot = slots.get(key)
+    if (!slot) {
+      slot = {
+        at,
+        firstAt: call.at,
+        lastAt: call.at,
+        model: call.model,
+        ...(call.modelName ? { modelName: call.modelName } : {}),
+        costUSD: 0,
+        unpriced: false,
+        tokens: { input: 0, output: 0, cacheRead: 0, cacheWrite: 0 },
+      }
+      slots.set(key, slot)
+    }
+    slot.firstAt = Math.min(slot.firstAt, call.at)
+    slot.lastAt = Math.max(slot.lastAt, call.at)
+    slot.costUSD += call.costUSD
+    slot.unpriced ||= call.unpriced
+    slot.tokens.input += call.tokens.input
+    slot.tokens.output += call.tokens.output
+    slot.tokens.cacheRead += call.tokens.cacheRead
+    slot.tokens.cacheWrite += call.tokens.cacheWrite
+  }
+  return [...slots.values()].sort((a, b) => a.at - b.at || a.model.localeCompare(b.model))
+}
+
+/// A hash of the Claude account signed in to `claudeDir`
+/// (`oauthAccount.accountUuid`), so two devices can tell whether they share
+/// limits without either sending the account's id. Claude Code keeps it in
+/// `~/.claude.json` for the default directory and in `<dir>/.claude.json`
+/// for one set by CLAUDE_CONFIG_DIR. Null for an API-key login or no file.
+export async function readClaudeAccountHash(claudeDir: string | undefined, home = homedir()): Promise<string | null> {
+  const custom = claudeDir !== undefined && resolve(claudeDir) !== resolve(home, '.claude')
+  const path = custom ? join(claudeDir, '.claude.json') : join(home, '.claude.json')
+  try {
+    const parsed = JSON.parse(await readFile(path, 'utf-8')) as { oauthAccount?: { accountUuid?: unknown } }
+    const id = parsed?.oauthAccount?.accountUuid
+    if (typeof id === 'string' && id) return createHash('sha256').update(`codeburn-claude-account|${id}`).digest('hex')
+  } catch {}
+  return null
 }
