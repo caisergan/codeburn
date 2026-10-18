@@ -175,6 +175,9 @@ export type RefreshOptions = {
   lookbackMs: number
   /// This device's account hash; a device with a different one is not counted.
   ownAccountHash: string | null
+  /// Ask devices whose last attempt failed right away, skipping the backoff
+  /// (the user asked to retry after reconnecting).
+  retryFailed?: boolean
   sharingDir?: string
   cacheDir?: string
 }
@@ -193,7 +196,7 @@ export async function refreshPeerCaches(opts: RefreshOptions): Promise<void> {
   const floor = now - opts.lookbackMs
   await Promise.all(remotes.map(async remote => {
     const cache = await readCache(cacheDir, remote)
-    const wait = cache.status === 'ok' ? MIN_FETCH_INTERVAL_MS : FAILED_FETCH_BACKOFF_MS
+    const wait = cache.status === 'ok' ? MIN_FETCH_INTERVAL_MS : opts.retryFailed ? 0 : FAILED_FETCH_BACKOFF_MS
     if (cache.lastAttemptAt !== null && now - cache.lastAttemptAt < wait && now >= cache.lastAttemptAt) return
     // The last slot of the previous answer may have been partial.
     const since = cache.through === null ? null : Math.max(floor, cache.through - SLOT_MS)

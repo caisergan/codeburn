@@ -14,8 +14,9 @@ import { readPeerLimitData, refreshPeerCaches } from './sharing/claude-limit-pee
 export const LOOKBACK_MS = (WEEK_LIST_COUNT + 1) * WEEK_MS + 24 * 60 * 60 * 1000
 
 /// `devices`: first ask paired devices for their latest spend (network);
-/// otherwise their cached data is used as is.
-export async function buildLimitsReport(now = new Date(), opts: { devices?: boolean } = {}): Promise<LimitsOutput> {
+/// otherwise their cached data is used as is. `retryFailed`: also ask devices
+/// whose last attempt failed, without waiting out the backoff.
+export async function buildLimitsReport(now = new Date(), opts: { devices?: boolean; retryFailed?: boolean } = {}): Promise<LimitsOutput> {
   // Whole local days, like every other command's range: the parser memoizes
   // on the range, so a range ending at "now" would re-parse on every request.
   const lookbackStart = new Date(now.getTime() - LOOKBACK_MS)
@@ -25,7 +26,7 @@ export async function buildLimitsReport(now = new Date(), opts: { devices?: bool
   const dirs = await getClaudeConfigDirs()
   const defaultDir = dirs[0]
   const refreshed = opts.devices
-    ? readClaudeAccountHash(defaultDir).then(ownAccountHash => refreshPeerCaches({ now: now.getTime(), lookbackMs: LOOKBACK_MS, ownAccountHash }))
+    ? readClaudeAccountHash(defaultDir).then(ownAccountHash => refreshPeerCaches({ now: now.getTime(), lookbackMs: LOOKBACK_MS, ownAccountHash, retryFailed: opts.retryFailed }))
     : Promise.resolve()
   const [log, events, projects] = await Promise.all([
     readReadingLog(),

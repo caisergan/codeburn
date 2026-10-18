@@ -45,6 +45,9 @@ describe('host device flow', () => {
     const remote = results.find((r) => !r.local)!
     expect(remote.name).toBe('MacBook')
     expect(remote.payload!.current!.cost).toBe(100)
+    expect(remote.address).toBe('127.0.0.1:7777')
+    expect(results[0]!.address).toBeUndefined()
+    expect(summarizeDeviceUsage(results).perDevice.map((d) => d.address)).toEqual([undefined, '127.0.0.1:7777'])
     expect(clientMock.fetchUsage).toHaveBeenCalledWith(
       expect.objectContaining({ host: '127.0.0.1', port: 7777, expectedFingerprint: 'remote-fp' }),
       'remote-token',

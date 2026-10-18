@@ -861,3 +861,17 @@
 "%@ no longer accepts this Mac, so its spend is missing. Pair it again." = "%@ no longer accepts this Mac, so its spend is missing. Pair it again.";
 "%@ is on another Claude account, so it is not counted here" = "%@ is on another Claude account, so it is not counted here";
 "Used outside your devices: the 5-hour limit rose while they spent almost nothing" = "Used outside your devices: the 5-hour limit rose while they spent almost nothing";
+"Retry all" = "Retry all";
+"Re-pair" = "Re-pair";
+"Still unreachable" = "Still unreachable";
+"Unreachable" = "Unreachable";
+"Timed out" = "Timed out";
+"Not authorized" = "Not authorized";
+"%@ refused this Mac's token." = "%@ refused this Mac's token.";
+"Couldn't reach %@." = "Couldn't reach %@.";
+"Check that the device is on and your VPN or Tailscale is connected." = "Check that the device is on and your VPN or Tailscale is connected.";
+"Pair it again to fix this." = "Pair it again to fix this.";
+"Last tried %@" = "Last tried %@";
+"1. On %@, run:" = "1. On %@, run:";
+"2. Then here, with the PIN it shows:" = "2. Then here, with the PIN it shows:";
+"Copy" = "Copy";

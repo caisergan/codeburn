@@ -203,6 +203,8 @@ export type DeviceSummary = {
   id: string
   name: string
   local: boolean
+  /** host:port of a paired device; absent for this machine. */
+  address?: string
   error?: string
   cost: number
   calls: number

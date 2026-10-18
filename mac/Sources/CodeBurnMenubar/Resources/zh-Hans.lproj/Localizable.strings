@@ -852,3 +852,17 @@
 "%@ no longer accepts this Mac, so its spend is missing. Pair it again." = "%@ 不再接受此 Mac，因此缺少其支出。请重新配对。";
 "%@ is on another Claude account, so it is not counted here" = "%@ 使用的是另一个 Claude 账户，因此不计入此处";
 "Used outside your devices: the 5-hour limit rose while they spent almost nothing" = "在您的设备之外使用：这些设备几乎没有支出，5 小时限额却上升了";
+"Retry all" = "全部重试";
+"Re-pair" = "重新配对";
+"Still unreachable" = "仍无法连接";
+"Unreachable" = "无法连接";
+"Timed out" = "已超时";
+"Not authorized" = "未授权";
+"%@ refused this Mac's token." = "%@ 拒绝了此 Mac 的令牌。";
+"Couldn't reach %@." = "无法连接到 %@。";
+"Check that the device is on and your VPN or Tailscale is connected." = "请确认设备已开机，并且 VPN 或 Tailscale 已连接。";
+"Pair it again to fix this." = "重新配对即可解决。";
+"Last tried %@" = "上次尝试 %@";
+"1. On %@, run:" = "1. 在 %@ 上运行：";
+"2. Then here, with the PIN it shows:" = "2. 然后在此处使用其显示的 PIN 运行：";
+"Copy" = "复制";

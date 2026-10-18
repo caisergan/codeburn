@@ -104,14 +104,34 @@ struct DataClient {
     /// `--devices` asks paired devices for their latest Claude spend first;
     /// with none paired it costs nothing.
     static let claudeLimitsSubcommand = ["limits", "--format", "json", "--devices"]
+    /// Also asks devices whose last attempt failed, skipping the CLI's
+    /// backoff; sent when the user retries a device.
+    static let claudeLimitsRetrySubcommand = claudeLimitsSubcommand + ["--retry-failed"]
 
     /// Claude 5-hour sessions and weeks (`codeburn limits`). Read-only; it
     /// reads the reading log this app writes, and the network only to reach
     /// paired devices.
     static func fetchClaudeLimits(
+        retryFailedDevices: Bool = false,
         qualityOfService: QualityOfService = .utility
     ) async throws -> ClaudeLimitsReport {
-        let result = try await runCLI(subcommand: claudeLimitsSubcommand, qualityOfService: qualityOfService)
+        if retryFailedDevices {
+            // A CLI older than `--retry-failed` rejects it; the plain fetch
+            // still answers, just without skipping the backoff.
+            do {
+                return try await fetchClaudeLimits(subcommand: claudeLimitsRetrySubcommand, qualityOfService: qualityOfService)
+            } catch DataClientError.nonZeroExit {
+                return try await fetchClaudeLimits(subcommand: claudeLimitsSubcommand, qualityOfService: qualityOfService)
+            }
+        }
+        return try await fetchClaudeLimits(subcommand: claudeLimitsSubcommand, qualityOfService: qualityOfService)
+    }
+
+    private static func fetchClaudeLimits(
+        subcommand: [String],
+        qualityOfService: QualityOfService
+    ) async throws -> ClaudeLimitsReport {
+        let result = try await runCLI(subcommand: subcommand, qualityOfService: qualityOfService)
         guard result.exitCode == 0 else {
             throw DataClientError.nonZeroExit(code: result.exitCode, stderr: result.stderr)
         }

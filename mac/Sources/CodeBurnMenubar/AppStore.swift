@@ -182,6 +182,12 @@ final class AppStore {
     /// A CLI that exits non-zero on `limits` (one that predates it) is asked
     /// again only after this, not on every Claude reading.
     @ObservationIgnored private var claudeLimitsRetryAfter: Date?
+    /// Paired devices whose retry is running (Combined › device rows).
+    private(set) var retryingDeviceIds: Set<String> = []
+    /// Devices a retry just found still failing; the row says so briefly.
+    private(set) var deviceRetryStillFailingIds: Set<String> = []
+    /// When each device was last retried, for the row's tooltip.
+    private(set) var deviceLastRetriedAt: [String: Date] = [:]
     /// Sessions | Weeks in Claude › Plan, remembered across launches.
     var claudeSessionsListMode: ClaudeSessionsListMode = ClaudeSessionsListMode.saved() {
         didSet { claudeSessionsListMode.persist() }
@@ -253,8 +259,8 @@ final class AppStore {
         }
     }
     /// `codeburn limits`, injectable for tests.
-    @ObservationIgnored var claudeLimitsFetcher: @Sendable () async throws -> ClaudeLimitsReport = {
-        try await DataClient.fetchClaudeLimits()
+    @ObservationIgnored var claudeLimitsFetcher: @Sendable (_ retryFailedDevices: Bool) async throws -> ClaudeLimitsReport = { retryFailedDevices in
+        try await DataClient.fetchClaudeLimits(retryFailedDevices: retryFailedDevices)
     }
     @ObservationIgnored var codexQuotaFetcher: @Sendable () async throws -> CodexUsage? = {
         try await CodexSubscriptionService.refreshIfBootstrapped()
@@ -1460,7 +1466,9 @@ final class AppStore {
 
     /// Refreshes `claudeLimits`, at most once per `minAge` unless forced.
     /// Single-flight: a call while one is running waits for that one.
-    func refreshClaudeLimits(force: Bool = false, minAge: TimeInterval = 60) async {
+    /// `retryFailedDevices`: also ask paired devices whose last attempt
+    /// failed, without the CLI's backoff.
+    func refreshClaudeLimits(force: Bool = false, minAge: TimeInterval = 60, retryFailedDevices: Bool = false) async {
         guard claudeQuotaBootstrapChecker() else {
             claudeLimits = nil
             return
@@ -1474,7 +1482,7 @@ final class AppStore {
         let fetcher = claudeLimitsFetcher
         let task = Task { [weak self] in
             do {
-                let report = try await fetcher()
+                let report = try await fetcher(retryFailedDevices)
                 guard let self else { return }
                 self.claudeLimits = report
                 self.claudeLimitsError = nil
@@ -1496,6 +1504,31 @@ final class AppStore {
         claudeLimitsFetchedAt = Date()
         await task.value
         claudeLimitsTask = nil
+    }
+
+    /// User-initiated retry of paired devices that failed (e.g. after the VPN
+    /// reconnects): re-pulls the combined payload without the popover-wide
+    /// loading state, and asks the devices for their Claude spend again
+    /// without waiting out the CLI's backoff.
+    func retryDevices(_ ids: [String]) async {
+        let ids = ids.filter { !retryingDeviceIds.contains($0) }
+        guard !ids.isEmpty, effectiveSelectedScope == .combined else { return }
+        retryingDeviceIds.formUnion(ids)
+        deviceRetryStillFailingIds.subtract(ids)
+        Task { [weak self] in await self?.refreshClaudeLimits(force: true, retryFailedDevices: true) }
+        await refreshQuietly(key: currentKey, includeOptimize: false, force: true)
+        let now = Date()
+        let failing = Set((payload.combined?.perDevice ?? []).filter { $0.error != nil }.map(\.id))
+        let stillFailing = Set(ids).intersection(failing)
+        for id in ids { deviceLastRetriedAt[id] = now }
+        retryingDeviceIds.subtract(ids)
+        guard !stillFailing.isEmpty else { return }
+        deviceRetryStillFailingIds.formUnion(stillFailing)
+        try? await Task.sleep(nanoseconds: 3_000_000_000)
+        // A newer retry of the same device owns the flag from here.
+        for id in stillFailing where deviceLastRetriedAt[id] == now {
+            deviceRetryStillFailingIds.remove(id)
+        }
     }
 
     /// The All tab's session row: opens Claude › Plan.

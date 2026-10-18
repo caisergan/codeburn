@@ -131,6 +131,19 @@ describe('Claude limits across paired devices (loopback mutual TLS)', () => {
     expect(peer!.slots.length).toBeGreaterThan(0)
   })
 
+  it('waits out the failure backoff unless asked to retry failed devices', async () => {
+    // Back online (e.g. the VPN reconnected) 10 s after the failed attempt.
+    await saveRemotes([remote()], sharingDir)
+    asked.length = 0
+    await refresh(NOW + 5 * 60_000 + 10_000)
+    expect(asked).toEqual([])
+    expect((await readPeerLimitData({ sharingDir, cacheDir }))[0]!.status).toBe('unreachable')
+
+    await refreshPeerCaches({ now: NOW + 5 * 60_000 + 10_000, lookbackMs: LOOKBACK, ownAccountHash: 'acct-1', retryFailed: true, sharingDir, cacheDir })
+    expect(asked).toHaveLength(1)
+    expect((await readPeerLimitData({ sharingDir, cacheDir }))[0]!.status).toBe('ok')
+  })
+
   it('drops a device on another Claude account', async () => {
     await saveRemotes([remote()], sharingDir)
     next = answer({ accountHash: 'acct-2' })
