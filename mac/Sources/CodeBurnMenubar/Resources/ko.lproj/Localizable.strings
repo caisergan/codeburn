@@ -854,3 +854,17 @@
 "%@ no longer accepts this Mac, so its spend is missing. Pair it again." = "%@ 이(가) 더 이상 이 Mac을 허용하지 않아 지출이 빠져 있습니다. 다시 페어링하세요.";
 "%@ is on another Claude account, so it is not counted here" = "%@ 은(는) 다른 Claude 계정이라 여기서는 집계되지 않습니다";
 "Used outside your devices: the 5-hour limit rose while they spent almost nothing" = "내 기기 밖에서 사용됨: 기기들의 지출이 거의 없는데 5시간 한도가 올랐습니다";
+"Retry all" = "모두 재시도";
+"Re-pair" = "다시 페어링";
+"Still unreachable" = "여전히 연결할 수 없음";
+"Unreachable" = "연결할 수 없음";
+"Timed out" = "시간 초과";
+"Not authorized" = "권한 없음";
+"%@ refused this Mac's token." = "%@이(가) 이 Mac의 토큰을 거부했습니다.";
+"Couldn't reach %@." = "%@에 연결할 수 없습니다.";
+"Check that the device is on and your VPN or Tailscale is connected." = "기기가 켜져 있고 VPN 또는 Tailscale이 연결되어 있는지 확인하세요.";
+"Pair it again to fix this." = "다시 페어링하면 해결됩니다.";
+"Last tried %@" = "마지막 시도 %@";
+"1. On %@, run:" = "1. %@에서 실행:";
+"2. Then here, with the PIN it shows:" = "2. 그런 다음 여기에서 표시된 PIN으로 실행:";
+"Copy" = "복사";

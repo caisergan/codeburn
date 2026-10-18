@@ -207,8 +207,18 @@ struct HeroTotals: Equatable {
 }
 
 private struct CombinedDeviceBreakdown: View {
+    @Environment(AppStore.self) private var store
     let usage: CombinedUsage
     let formatTokens: (Double) -> String
+    /// The device whose re-pair steps are open under its row.
+    @State private var repairingDeviceId: String?
+
+    /// Failed paired devices a retry could bring back.
+    private var retryableIds: [String] {
+        usage.perDevice
+            .filter { !$0.local && $0.error.map { PairedDeviceFailure(error: $0).canRetry } == true }
+            .map(\.id)
+    }
 
     var body: some View {
         VStack(alignment: .leading, spacing: 5) {
@@ -217,31 +227,200 @@ private struct CombinedDeviceBreakdown: View {
                     .font(.system(size: 10))
                 Text(L("%1$lld of %2$lld devices", usage.combined.reachableCount, usage.combined.deviceCount))
                     .font(.system(size: 11, weight: .medium))
+                    .contentTransition(.numericText())
+                if retryableIds.count >= 2 {
+                    Spacer(minLength: 6)
+                    Button {
+                        Task { await store.retryDevices(retryableIds) }
+                    } label: {
+                        Label(L("Retry all"), systemImage: "arrow.clockwise")
+                            .font(.system(size: 10.5, weight: .medium))
+                            .labelStyle(.titleAndIcon)
+                    }
+                    .buttonStyle(.plain)
+                    .foregroundStyle(Theme.brandAccent)
+                    .disabled(retryableIds.allSatisfy(store.retryingDeviceIds.contains))
+                }
             }
             .foregroundStyle(.secondary)
 
             VStack(spacing: 3) {
                 ForEach(usage.perDevice, id: \.id) { device in
-                    HStack(spacing: 6) {
-                        Image(systemName: device.error == nil ? "circle.fill" : "exclamationmark.triangle.fill")
-                            .font(.system(size: device.error == nil ? 5 : 9, weight: .semibold))
-                            .foregroundStyle(device.error == nil ? Color.secondary.opacity(0.75) : Theme.semanticWarning)
-                            .frame(width: 10)
-                        Text(device.local ? L("%@ · local", device.name) : device.name)
-                            .font(.system(size: 10.5, weight: .medium))
-                            .lineLimit(1)
-                            .truncationMode(.tail)
-                        Spacer(minLength: 6)
-                        Text(device.error == nil ? device.cost.asCurrency() : L("Unavailable"))
-                            .font(.system(size: 10.5))
-                            .monospacedDigit()
-                            .foregroundStyle(.secondary)
-                        Text(formatTokens(Double(device.totalTokens)))
-                            .font(.system(size: 10))
-                            .monospacedDigit()
-                            .foregroundStyle(.tertiary)
+                    CombinedDeviceRow(
+                        device: device,
+                        formatTokens: formatTokens,
+                        isRepairOpen: repairingDeviceId == device.id,
+                        toggleRepair: {
+                            repairingDeviceId = repairingDeviceId == device.id ? nil : device.id
+                        }
+                    )
+                    if repairingDeviceId == device.id, device.error != nil {
+                        RepairDeviceSteps(device: device)
+                            .transition(.opacity.combined(with: .move(edge: .top)))
                     }
                 }
+            }
+        }
+        .animation(.easeOut(duration: 0.2), value: repairingDeviceId)
+        .onChange(of: usage.perDevice.map(\.error)) {
+            // Close the steps once the device answers again.
+            if let id = repairingDeviceId,
+               usage.perDevice.first(where: { $0.id == id })?.error == nil {
+                repairingDeviceId = nil
+            }
+        }
+    }
+}
+
+private struct CombinedDeviceRow: View {
+    @Environment(AppStore.self) private var store
+    let device: CombinedDeviceUsage
+    let formatTokens: (Double) -> String
+    let isRepairOpen: Bool
+    let toggleRepair: () -> Void
+    /// Brief highlight when a retry brings the device back.
+    @State private var flash = false
+
+    private var isRetrying: Bool { store.retryingDeviceIds.contains(device.id) }
+
+    var body: some View {
+        HStack(spacing: 6) {
+            leadingIcon
+                .frame(width: 10, height: 10)
+            Text(device.local ? L("%@ · local", device.name) : device.name)
+                .font(.system(size: 10.5, weight: .medium))
+                .lineLimit(1)
+                .truncationMode(.tail)
+            Spacer(minLength: 6)
+            if let error = device.error {
+                failureTrailing(PairedDeviceFailure(error: error))
+            } else {
+                Group {
+                    Text(device.cost.asCurrency())
+                        .font(.system(size: 10.5))
+                        .foregroundStyle(.secondary)
+                    Text(formatTokens(Double(device.totalTokens)))
+                        .font(.system(size: 10))
+                        .foregroundStyle(.tertiary)
+                }
+                .monospacedDigit()
+                .transition(.opacity)
+            }
+        }
+        .frame(minHeight: 16)
+        .background(
+            RoundedRectangle(cornerRadius: 4)
+                .fill(Theme.semanticSuccess.opacity(flash ? 0.16 : 0))
+                .padding(.horizontal, -4)
+                .padding(.vertical, -1)
+        )
+        .help(device.error.map {
+            PairedDeviceFailure.helpText(error: $0, address: device.address, lastTriedAt: store.deviceLastRetriedAt[device.id])
+        } ?? "")
+        .animation(.easeOut(duration: 0.25), value: device.error == nil)
+        .animation(.easeOut(duration: 0.15), value: isRetrying)
+        .onChange(of: device.error == nil) { _, reachable in
+            // Only a retry the user asked for earns the highlight.
+            guard reachable, store.deviceLastRetriedAt[device.id] != nil else { return }
+            flash = true
+            withAnimation(.easeOut(duration: 1.2).delay(0.2)) { flash = false }
+        }
+    }
+
+    @ViewBuilder
+    private var leadingIcon: some View {
+        if isRetrying {
+            ProgressView()
+                .controlSize(.mini)
+                .scaleEffect(0.6)
+        } else if device.error == nil {
+            Image(systemName: "circle.fill")
+                .font(.system(size: 5, weight: .semibold))
+                .foregroundStyle(Color.secondary.opacity(0.75))
+        } else {
+            Image(systemName: "exclamationmark.triangle.fill")
+                .font(.system(size: 9, weight: .semibold))
+                .foregroundStyle(Theme.semanticWarning)
+        }
+    }
+
+    @ViewBuilder
+    private func failureTrailing(_ failure: PairedDeviceFailure) -> some View {
+        let stillFailing = store.deviceRetryStillFailingIds.contains(device.id)
+        Text(isRetrying ? L("Connecting…") : stillFailing ? L("Still unreachable") : failure.label)
+            .font(.system(size: 10.5, weight: stillFailing ? .semibold : .regular))
+            .foregroundStyle(isRetrying ? AnyShapeStyle(.secondary) : AnyShapeStyle(Theme.semanticWarning))
+            .contentTransition(.opacity)
+        if !device.local {
+            if failure.canRetry {
+                Button {
+                    Task { await store.retryDevices([device.id]) }
+                } label: {
+                    Label(L("Retry"), systemImage: "arrow.clockwise")
+                        .font(.system(size: 10, weight: .medium))
+                        .labelStyle(.titleAndIcon)
+                }
+                .buttonStyle(.bordered)
+                .controlSize(.mini)
+                .disabled(isRetrying)
+            } else {
+                Button(action: toggleRepair) {
+                    Text(L("Re-pair"))
+                        .font(.system(size: 10, weight: .medium))
+                }
+                .buttonStyle(.bordered)
+                .controlSize(.mini)
+                .tint(Theme.brandAccent)
+                .foregroundStyle(Theme.brandAccent)
+                .opacity(isRepairOpen ? 0.7 : 1)
+            }
+        }
+    }
+}
+
+/// Pairing lives in the CLI: a PIN from the other device, then `devices add`
+/// here. Adding a device it already has replaces the old token.
+private struct RepairDeviceSteps: View {
+    let device: CombinedDeviceUsage
+
+    private var addCommand: String {
+        "codeburn devices add \(device.address ?? "<host:port>") --pin <PIN>"
+    }
+
+    var body: some View {
+        VStack(alignment: .leading, spacing: 5) {
+            step(L("1. On %@, run:", device.name), command: "codeburn share --pair")
+            step(L("2. Then here, with the PIN it shows:"), command: addCommand)
+        }
+        .padding(8)
+        .frame(maxWidth: .infinity, alignment: .leading)
+        .background(RoundedRectangle(cornerRadius: 6).fill(Color.primary.opacity(0.05)))
+        .padding(.leading, 16)
+        .padding(.vertical, 2)
+    }
+
+    private func step(_ title: String, command: String) -> some View {
+        VStack(alignment: .leading, spacing: 2) {
+            Text(title)
+                .font(.system(size: 10))
+                .foregroundStyle(.secondary)
+            HStack(spacing: 6) {
+                Text(command)
+                    .font(.system(size: 10, design: .monospaced))
+                    .lineLimit(1)
+                    .truncationMode(.middle)
+                    .textSelection(.enabled)
+                Spacer(minLength: 4)
+                Button {
+                    NSPasteboard.general.clearContents()
+                    NSPasteboard.general.setString(command, forType: .string)
+                } label: {
+                    Image(systemName: "doc.on.doc")
+                        .font(.system(size: 9.5))
+                }
+                .buttonStyle(.plain)
+                .foregroundStyle(.secondary)
+                .help(L("Copy"))
             }
         }
     }

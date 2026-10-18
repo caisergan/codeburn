@@ -191,6 +191,8 @@ struct CombinedDeviceUsage: Codable, Sendable {
     let id: String
     let name: String
     let local: Bool
+    /// `host:port` of a paired device. Older CLIs omit it.
+    var address: String? = nil
     let error: String?
     let cost: Double
     let calls: Int

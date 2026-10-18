@@ -854,3 +854,17 @@
 "%@ no longer accepts this Mac, so its spend is missing. Pair it again." = "%@ n'accepte plus ce Mac, ses dépenses manquent donc. Associez-le à nouveau.";
 "%@ is on another Claude account, so it is not counted here" = "%@ utilise un autre compte Claude, il n'est donc pas compté ici";
 "Used outside your devices: the 5-hour limit rose while they spent almost nothing" = "Utilisée hors de vos appareils : la limite de 5 h a augmenté alors qu'ils n'ont presque rien dépensé";
+"Retry all" = "Tout réessayer";
+"Re-pair" = "Réassocier";
+"Still unreachable" = "Toujours injoignable";
+"Unreachable" = "Injoignable";
+"Timed out" = "Délai dépassé";
+"Not authorized" = "Non autorisé";
+"%@ refused this Mac's token." = "%@ a refusé le jeton de ce Mac.";
+"Couldn't reach %@." = "Impossible de joindre %@.";
+"Check that the device is on and your VPN or Tailscale is connected." = "Vérifiez que l'appareil est allumé et que votre VPN ou Tailscale est connecté.";
+"Pair it again to fix this." = "Associez-le à nouveau pour corriger cela.";
+"Last tried %@" = "Dernier essai à %@";
+"1. On %@, run:" = "1. Sur %@, exécutez :";
+"2. Then here, with the PIN it shows:" = "2. Puis ici, avec le code PIN affiché :";
+"Copy" = "Copier";

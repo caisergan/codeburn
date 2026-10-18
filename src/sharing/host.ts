@@ -30,6 +30,7 @@ export type DeviceUsage = {
   id: string // stable unique id (cert fingerprint for remotes, 'local' for this device)
   name: string
   local: boolean
+  address?: string // host:port a remote is reached at
   payload?: DevicePayload
   error?: string
 }
@@ -51,11 +52,13 @@ function num(n: number | undefined): number {
 
 function summarizeOneDevice(d: DeviceUsage, window?: SummaryWindow): DeviceSummary {
   const error = d.error !== undefined ? d.error : d.payload === undefined ? 'no usage payload' : undefined
+  const address = d.address !== undefined ? { address: d.address } : {}
   if (error !== undefined || d.payload === undefined) {
     return {
       id: d.id,
       name: d.name,
       local: d.local,
+      ...address,
       error,
       ...zeroUsage,
     }
@@ -77,6 +80,7 @@ function summarizeOneDevice(d: DeviceUsage, window?: SummaryWindow): DeviceSumma
     id: d.id,
     name: d.name,
     local: d.local,
+    ...address,
     cost: num(cur?.cost),
     calls: num(cur?.calls),
     sessions: num(cur?.sessions),
@@ -189,15 +193,16 @@ export async function pullDevices(
   // powered-off device degrades to an error row instead of blocking the rest.
   const remoteResults = await Promise.all(
     remotes.map(async (r): Promise<DeviceUsage> => {
+      const base = { id: r.fingerprint, name: r.name, local: false, address: `${r.host}:${r.port}` }
       try {
         const res = await fetchUsage({ identity, host: r.host, port: r.port, expectedFingerprint: r.fingerprint }, r.token, query)
         // Re-sanitize on receipt: do not trust the sender to have stripped its
         // own project names/sessions (it may run an older build). Belt and
         // suspenders alongside the sender-side sanitize.
-        if (res.status === 200) return { id: r.fingerprint, name: r.name, local: false, payload: sanitizeForSharing(res.json as MenubarPayload) }
-        return { id: r.fingerprint, name: r.name, local: false, error: res.status === 401 ? 'not authorized (re-pair?)' : `HTTP ${res.status}` }
+        if (res.status === 200) return { ...base, payload: sanitizeForSharing(res.json as MenubarPayload) }
+        return { ...base, error: res.status === 401 ? 'not authorized (re-pair?)' : `HTTP ${res.status}` }
       } catch (e) {
-        return { id: r.fingerprint, name: r.name, local: false, error: e instanceof Error ? e.message : String(e) }
+        return { ...base, error: e instanceof Error ? e.message : String(e) }
       }
     }),
   )

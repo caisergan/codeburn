@@ -854,3 +854,17 @@
 "%@ no longer accepts this Mac, so its spend is missing. Pair it again." = "%@ がこのMacを受け付けなくなったため、支出が含まれていません。もう一度ペアリングしてください。";
 "%@ is on another Claude account, so it is not counted here" = "%@ は別の Claude アカウントのため、ここでは集計されません";
 "Used outside your devices: the 5-hour limit rose while they spent almost nothing" = "お使いのデバイス以外で使用: デバイスの支出がほぼないのに5時間の上限が増えました";
+"Retry all" = "すべて再試行";
+"Re-pair" = "再ペアリング";
+"Still unreachable" = "まだ接続できません";
+"Unreachable" = "接続できません";
+"Timed out" = "タイムアウト";
+"Not authorized" = "認証されていません";
+"%@ refused this Mac's token." = "%@ がこの Mac のトークンを拒否しました。";
+"Couldn't reach %@." = "%@ に接続できませんでした。";
+"Check that the device is on and your VPN or Tailscale is connected." = "デバイスの電源が入っていて、VPN または Tailscale が接続されているか確認してください。";
+"Pair it again to fix this." = "もう一度ペアリングすると解決します。";
+"Last tried %@" = "最終試行 %@";
+"1. On %@, run:" = "1. %@ で次を実行:";
+"2. Then here, with the PIN it shows:" = "2. 次に、表示された PIN を使ってここで実行:";
+"Copy" = "コピー";

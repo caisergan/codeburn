@@ -266,7 +266,7 @@ const SERVE_OPTIONS: Readonly<Record<string, Readonly<Record<string, ServeOption
     '--project': 'value', '--exclude': 'value',
   },
   limits: {
-    '--format': 'value', '--devices': 'flag',
+    '--format': 'value', '--devices': 'flag', '--retry-failed': 'flag',
   },
 }
 
