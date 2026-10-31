@@ -891,6 +891,7 @@ private struct ClaudeSettingsTab: View {
                     }
                 }
             }
+            ClaudeWarmSettingsSection()
         }
         .formStyle(.grouped)
         .padding()

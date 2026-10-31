@@ -2102,17 +2102,21 @@ private struct PlanInsight: View {
     @ViewBuilder
     private func loadedBody(usage: SubscriptionUsage) -> some View {
         VStack(alignment: .leading, spacing: 10) {
-            HStack(alignment: .firstTextBaseline) {
+            HStack(alignment: .firstTextBaseline, spacing: 8) {
                 Text(usage.tier.displayName)
                     .font(.system(size: 13, weight: .semibold))
                     .foregroundStyle(Theme.brandAccent)
                 Spacer()
-                if let resets = headlineReset(usage: usage) {
+                ClaudeWarmButton(isIdle: fiveHourIdle(usage), fiveHourResetsAt: usage.fiveHourResetsAt)
+                if fiveHourIdle(usage) == true, WindowWarmer.shared.canWarm, let next = WindowWarmer.shared.nextWarm() {
+                    ClaudeNextWarmLabel(next: next)
+                } else if let resets = headlineReset(usage: usage) {
                     Text(L("Resets %@", resets))
                         .font(.system(size: 10.5))
                         .foregroundStyle(.secondary)
                 }
             }
+            ClaudeWarmBannerRow()
 
             VStack(spacing: 8) {
                 if let p = usage.fiveHourPercent, !Self.isIdleFiveHour(percent: p, resetsAt: usage.fiveHourResetsAt) || store.claudeLimits == nil {
@@ -2201,6 +2205,12 @@ private struct PlanInsight: View {
             return WindowProjection(percent: prior, willOverflow: prior > 100, hitsLimitAt: nil, source: .historicalBaseline)
         }
         return nil
+    }
+
+    /// Whether no 5-hour window is running; nil before the reading loads.
+    private func fiveHourIdle(_ usage: SubscriptionUsage) -> Bool? {
+        guard let percent = usage.fiveHourPercent else { return nil }
+        return Self.isIdleFiveHour(percent: percent, resetsAt: usage.fiveHourResetsAt)
     }
 
     private func headlineReset(usage: SubscriptionUsage) -> String? {

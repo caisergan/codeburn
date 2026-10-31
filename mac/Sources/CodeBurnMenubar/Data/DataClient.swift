@@ -148,6 +148,17 @@ struct DataClient {
         }
     }
 
+    /// `codeburn warm …` (the Claude window warmer). Always a one-shot spawn:
+    /// a warm runs Claude Code, and the CLI keeps the silence watchdog fed
+    /// with progress keepalives while it does.
+    static func runWarmCommand(_ subcommand: [String]) async throws -> Data {
+        let result = try await runCLI(subcommand: subcommand, bypassResident: true, qualityOfService: .userInitiated)
+        guard result.exitCode == 0 else {
+            throw DataClientError.nonZeroExit(code: result.exitCode, stderr: result.stderr)
+        }
+        return result.stdout
+    }
+
     static func statusSubcommand(period: Period,
                                  day: String? = nil,
                                  days: Set<String> = [],

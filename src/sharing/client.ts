@@ -108,6 +108,20 @@ export function fetchClaudeLimits(ep: PeerEndpoint, token: string, since: string
   return call(ep, 'GET', `/api/claude-limits${qs}`, { authorization: `Bearer ${token}` }, undefined, timeoutMs)
 }
 
+// The Claude window warmer on a paired device (docs/design/claude-window-warmer.md).
+export function fetchWarmStatus(ep: PeerEndpoint, token: string, timeoutMs = 8000): Promise<Response> {
+  return call(ep, 'GET', '/api/claude-warm', { authorization: `Bearer ${token}` }, undefined, timeoutMs)
+}
+
+export function putWarmSchedule(ep: PeerEndpoint, token: string, schedule: unknown): Promise<Response> {
+  return call(ep, 'PUT', '/api/claude-warm/schedule', { authorization: `Bearer ${token}` }, JSON.stringify(schedule))
+}
+
+// A warm runs Claude Code and then re-reads usage, which can take a while.
+export function postWarmNow(ep: PeerEndpoint, token: string, timeoutMs = 150_000): Promise<Response> {
+  return call(ep, 'POST', '/api/claude-warm/now', { authorization: `Bearer ${token}` }, '{}', timeoutMs)
+}
+
 function safeJson(s: string): unknown {
   try {
     return JSON.parse(s)
