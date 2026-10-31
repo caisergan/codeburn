@@ -168,6 +168,7 @@ final class AppDelegate: NSObject, NSApplicationDelegate, NSPopoverDelegate, NSM
         capacityDockController = CapacityDockController(store: store)
         capacityDockController?.start()
         observeStore()
+        WindowWarmer.shared.start(store: store)
         startRefreshLoop()
         startNapBackstop()
         setupWakeObservers()

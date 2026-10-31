@@ -20,6 +20,17 @@ export type ShareServerOptions = {
   // host's Claude sessions view. Absent on builds that do not send it: the
   // route then answers 404, which the host reads as "unsupported".
   getClaudeLimits?: (sinceMs: number | undefined) => Promise<unknown>
+  // The Claude window warmer (docs/design/claude-window-warmer.md). Absent on
+  // builds without it (the routes answer 404). `allowed` is `--allow-warm`:
+  // without it a paired peer can read the status but not change the schedule
+  // or make this device send a message.
+  warm?: {
+    allowed: boolean
+    status: () => Promise<unknown>
+    // Null when the body is not a valid schedule.
+    setSchedule: (body: unknown) => Promise<unknown | null>
+    warmNow: () => Promise<unknown>
+  }
   // Called after a successful pairing so the caller can persist the peer list.
   onPaired?: () => void
   // Enables the interactive approve flow (POST /api/peer/pair-request): return
@@ -194,6 +205,39 @@ export class ShareServer {
       const sinceMs = since ? Date.parse(since) : undefined
       json(200, await this.opts.getClaudeLimits(sinceMs !== undefined && Number.isFinite(sinceMs) ? sinceMs : undefined))
       return
+    }
+
+    if (url.pathname.startsWith('/api/claude-warm') && this.opts.warm) {
+      const clientFp = this.clientFingerprint(req)
+      const token = (req.headers['authorization'] ?? '').replace(/^Bearer\s+/i, '')
+      if (!clientFp || !token || !this.opts.peers.authorize(token, clientFp)) {
+        json(401, { error: 'unauthorized' })
+        return
+      }
+      const warm = this.opts.warm
+      if (url.pathname === '/api/claude-warm' && req.method === 'GET') {
+        json(200, await warm.status())
+        return
+      }
+      const isSchedule = url.pathname === '/api/claude-warm/schedule' && req.method === 'PUT'
+      const isNow = url.pathname === '/api/claude-warm/now' && req.method === 'POST'
+      if (isSchedule || isNow) {
+        if (!warm.allowed) {
+          json(403, { error: 'this device does not accept warm requests (start it with --allow-warm)', code: 'warm_not_allowed' })
+          return
+        }
+        if (isNow) {
+          json(200, await warm.warmNow())
+          return
+        }
+        const updated = await warm.setSchedule(safeJson(await readBody(req)))
+        if (updated === null) {
+          json(400, { error: 'invalid schedule' })
+          return
+        }
+        json(200, updated)
+        return
+      }
     }
 
     json(404, { error: 'not found' })

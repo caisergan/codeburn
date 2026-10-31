@@ -932,6 +932,7 @@ program
   .option('--port <number>', 'Port to listen on', parseInteger, 7777)
   .option('--pair', 'Open a pairing window and print a PIN to add a new device')
   .option('--always', 'Keep sharing until stopped (default stops after 10 min idle)')
+  .option('--allow-warm', 'Let paired devices set and run the Claude window warmer on this device (sends one short Claude Code message per warm)')
   .option('--format <format>', 'Output format: text, json', 'text')
   .action(async (action: string | undefined, opts) => {
     assertFormat(opts.format, ['text', 'json'], 'share')
@@ -953,7 +954,7 @@ program
       process.stderr.write('codeburn share: --format json is only supported for `share status`.\n')
       process.exit(1)
     }
-    await runShareServer({ port: opts.port, pair: !!opts.pair, always: !!opts.always })
+    await runShareServer({ port: opts.port, pair: !!opts.pair, always: !!opts.always, allowWarm: !!opts.allowWarm })
   })
 
 program
@@ -3353,6 +3354,21 @@ program
     // timeout keeps its child alive long past the output, so leave on purpose
     // once the output has flushed and nothing is mid-rotation.
     process.exit(0)
+  })
+
+program
+  .command('warm [action]')
+  .description('Claude window warmer: start a 5-hour window now with one short Claude Code message, only when none is running. Actions: status | schedule --set <json>')
+  .option('--device <name>', 'Act on a paired device instead of this machine')
+  .option('--devices', 'With status: also ask every paired device')
+  .option('--set <json>', 'With schedule: {"enabled":true,"times":["07:00","12:00"],"days":[0,1,2,3,4,5,6],"timeZone":"Europe/Istanbul"} (days: 0 = Monday)')
+  .option('--force', 'Skip the idle check (still sends only one message)')
+  .option('--scheduled', 'Record the warm as scheduled rather than manual')
+  .option('--format <format>', 'Output format: text, json', 'text')
+  .action(async (action: string | undefined, opts) => {
+    assertFormat(opts.format, ['text', 'json'], 'warm')
+    const { runWarmCommand } = await import('./claude-warm-cli.js')
+    await runWarmCommand(action, opts)
   })
 
 program

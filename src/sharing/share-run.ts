@@ -11,6 +11,7 @@ import { loadPricing } from '../models.js'
 import { buildClaudeLimitsShare } from './claude-limits-share.js'
 import { buildMenubarPayloadForRange } from '../usage-aggregator.js'
 import { periodInfoFromQuery } from '../cli-date.js'
+import { buildWarmStatus, runWarm, setWarmSchedule, startWarmScheduler } from '../claude-warm.js'
 
 function lanAddress(): string | null {
   for (const list of Object.values(networkInterfaces())) {
@@ -26,7 +27,9 @@ const IDLE_TIMEOUT_MS = 10 * 60_000
 // Run the secure share server. On-demand by default: it stops after 10 minutes
 // of no requests. `--always` keeps it up until Ctrl+C (the opt-in persistent
 // mode). `--pair` opens a one-time pairing window and prints the PIN + command.
-export async function runShareServer(opts: { port: number; pair: boolean; always: boolean }): Promise<void> {
+// `--allow-warm` lets paired devices set this device's Claude warm schedule
+// and ask it to warm now, and runs that schedule here.
+export async function runShareServer(opts: { port: number; pair: boolean; always: boolean; allowWarm?: boolean }): Promise<void> {
   await loadPricing()
   const dir = getSharingDir()
   const identity = await loadOrCreateIdentity(dir)
@@ -42,6 +45,12 @@ export async function runShareServer(opts: { port: number; pair: boolean; always
     peers,
     getUsage,
     getClaudeLimits: buildClaudeLimitsShare,
+    warm: {
+      allowed: !!opts.allowWarm,
+      status: () => buildWarmStatus({ allowed: !!opts.allowWarm }),
+      setSchedule: async (body) => (await setWarmSchedule(body)) === null ? null : buildWarmStatus({ allowed: true }),
+      warmNow: () => runWarm({ trigger: 'manual' }),
+    },
     onPaired: () => {
       void savePeers(peers.list(), dir)
     },
@@ -71,6 +80,11 @@ export async function runShareServer(opts: { port: number; pair: boolean; always
     const pin = server.openPairing(120_000)
     process.stdout.write(`\n  Manual fallback (if discovery is blocked):\n`)
     process.stdout.write(`    codeburn devices add ${ip}:${port} --pin ${pin}\n`)
+  }
+  if (opts.allowWarm) {
+    startWarmScheduler()
+    process.stdout.write(`\n  Claude window warmer on: paired devices can set the warm schedule.\n`)
+    if (!opts.always) process.stdout.write(`  The schedule only runs while sharing is on; add --always to keep it running.\n`)
   }
   process.stdout.write(`\n  ${peers.list().length} paired device(s). Press Ctrl+C to stop.\n\n`)
 
