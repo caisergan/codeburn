@@ -382,7 +382,11 @@ export const PROVIDER_PARSE_VERSIONS: Record<string, string> = {
   // skill's body) no longer replaces the prompt's text, and a `/rename`
   // (`custom-title`) beats Claude's `ai-title`. Turns, calls and costs are
   // unchanged; cached turns need the prompt text re-read.
-  claude: 'advisor-usage-v1-skills-rich-capture-v1-cross-provider-pr-v1-session-lineage-capture-v1-queued-human-prompts-v1-per-call-cwd-v1-meta-prompts-v1',
+  // streamed-tool-blocks-v1: parallel tool_use blocks written on earlier lines
+  // of one streamed message are kept, so cached calls regain their tools.
+  // powershell-shell-tool-v1: the Windows PowerShell tool is a shell tool, so
+  // cached calls regain the commands compaction used to drop.
+  claude: 'advisor-usage-v1-skills-rich-capture-v1-cross-provider-pr-v1-session-lineage-capture-v1-queued-human-prompts-v1-per-call-cwd-v1-meta-prompts-v1-streamed-tool-blocks-v1-powershell-shell-tool-v1',
   cline: 'worktree-project-grouping-v1',
   // reported-cost-v1: the CLI reports its own per-message cost, so entries
   // cached before cline-cli joined the reported-cost allowlist in parser.ts
@@ -617,14 +621,18 @@ export const PROVIDER_PARSE_VERSIONS: Record<string, string> = {
   // cached before this hold costUSD: undefined and are re-priced from the
   // token floor on every read, so they must re-parse once for the real dollars
   // to land.
-  warp: 'worktree-project-grouping-v1-est-cost-billing-cost-v1',
+  // billed-cost-v1: total_billed_cost_in_cents prices conversations that carry
+  // no provider cost or charged usage.
+  warp: 'worktree-project-grouping-v1-est-cost-billing-cost-v1-billed-cost-v1',
   // cache-read-v1-est-cost: gen_metadata and RPC usage now carry cache-read
   // tokens, fields 9/10 read as thinking/response (they were swapped), and
   // placeholder-only models are priced and flagged costIsEstimated.
   // model-fallback-v1: gen_metadata without usage.model falls back to
   // chatModel.model instead of dropping the session, Gemini 3.8 Flash
   // placeholders resolve, and Gemini 3 Flash -a/-d rows are priced.
-  antigravity: 'worktree-project-grouping-v7-cache-read-v1-est-cost-model-fallback-v1',
+  // user-msg-v1: extracts user prompts from brain transcripts (<USER_REQUEST>)
+  // or SQLite steps table, attributing userMessage across calls and turns.
+  antigravity: 'worktree-project-grouping-v7-cache-read-v1-est-cost-model-fallback-v1-user-msg-v1',
   // pr-attribution-v1: the parser now reads the `message`/`part` tables for
   // per-turn user prompt text and the GitHub PR URLs it references. Cached
   // ZCode sessions hold empty userMessage turns and no session prLinks, so

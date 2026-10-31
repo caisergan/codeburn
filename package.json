@@ -2,6 +2,7 @@
   "name": "codeburn",
   "version": "0.9.27",
   "description": "See where your AI spend goes - by task, tool, model, and project",
+  "mcpName": "io.github.getagentseal/codeburn",
   "type": "module",
   "main": "./dist/cli.js",
   "bin": {

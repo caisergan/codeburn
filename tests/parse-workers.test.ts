@@ -1,6 +1,6 @@
 import { spawnSync } from 'node:child_process'
 import { appendFile, mkdir, mkdtemp, readFile, readdir, rm, writeFile } from 'node:fs/promises'
-import { tmpdir } from 'node:os'
+import { availableParallelism, tmpdir } from 'node:os'
 import { join } from 'node:path'
 import { createHash } from 'node:crypto'
 
@@ -25,6 +25,8 @@ vi.setConfig({ testTimeout: 60_000 })
 const BIG_SYSTEM = { cores: 16, availableBytes: 32 * 1024 ** 3 }
 const BIG_PENDING = { files: 5000, bytes: 6 * 1024 ** 3 }
 const NO_ENV = {} as NodeJS.ProcessEnv
+// A CODEBURN_PARSE_WORKERS request is capped at the core count, so the parallel runs ask for no more than the machine has.
+const WORKERS = Math.min(3, availableParallelism())
 
 describe('decideParseWorkers', () => {
   it('scales with cores, memory budget and pending file count', () => {
@@ -299,7 +301,7 @@ describe('parallel cold parse', () => {
     const parallelCache = join(home, 'cache-parallel')
     const args = ['status', '--format', 'menubar-json']
     const serial = runCli(args, home, { CODEBURN_PARSE_WORKERS: '0', CODEBURN_CACHE_DIR: serialCache })
-    const parallel = runCli(args, home, { CODEBURN_PARSE_WORKERS: '3', CODEBURN_CACHE_DIR: parallelCache, ...extraParallelEnv })
+    const parallel = runCli(args, home, { CODEBURN_PARSE_WORKERS: String(WORKERS), CODEBURN_CACHE_DIR: parallelCache, ...extraParallelEnv })
 
     expect(serial.status, serial.stderr).toBe(0)
     expect(parallel.status, parallel.stderr).toBe(0)
@@ -354,7 +356,7 @@ describe('parallel cold parse', () => {
 
     const parallel = await bothWays({ CODEBURN_VERBOSE: '1' })
 
-    expect(parallel.stderr).toContain('codeburn: codex parse workers=3')
+    expect(parallel.stderr).toContain(`codeburn: codex parse workers=${WORKERS}`)
     // Pin that the codex-cache comparison in bothWays was not vacuous.
     expect(await codexResults(join(home, 'cache-parallel'))).toContain('rollout-')
     // Pin that the codex discard path actually ran rather than passing by luck.
@@ -372,9 +374,9 @@ describe('parallel cold parse', () => {
     const cache = join(home, 'cache-inc')
     const args = ['status', '--format', 'menubar-json']
 
-    const cold = runCli(args, home, { CODEBURN_PARSE_WORKERS: '3', CODEBURN_CACHE_DIR: cache, CODEBURN_VERBOSE: '1' })
+    const cold = runCli(args, home, { CODEBURN_PARSE_WORKERS: String(WORKERS), CODEBURN_CACHE_DIR: cache, CODEBURN_VERBOSE: '1' })
     expect(cold.status, cold.stderr).toBe(0)
-    expect(cold.stderr).toContain('codeburn: codex parse workers=3')
+    expect(cold.stderr).toContain(`codeburn: codex parse workers=${WORKERS}`)
 
     await appendFile(path, codexTaskLines([{ n: 4, at: '2026-05-04T09:40:00.000Z' }]).join('\n') + '\n')
     // `status --format menubar-json` now persists a corpus-fingerprint-keyed
@@ -385,7 +387,7 @@ describe('parallel cold parse', () => {
     // served from the (correctly!) settling snapshot with no parse at all.
     // Force the window to 0 so this "warm" run actually reaches the parse
     // pipeline this test is exercising.
-    const warm = runCli(args, home, { CODEBURN_PARSE_WORKERS: '3', CODEBURN_CACHE_DIR: cache, CODEBURN_VERBOSE: '1', CODEBURN_STATUS_SNAPSHOT_SETTLE_MS: '0' })
+    const warm = runCli(args, home, { CODEBURN_PARSE_WORKERS: String(WORKERS), CODEBURN_CACHE_DIR: cache, CODEBURN_VERBOSE: '1', CODEBURN_STATUS_SNAPSHOT_SETTLE_MS: '0' })
     expect(warm.status, warm.stderr).toBe(0)
     expect(warm.stderr).toContain('codeburn: codex parse workers=0 (no full parses pending)')
   })

@@ -151,6 +151,14 @@ Setup for all three platforms, including WSL, is in [Menu bar and tray](docs/men
 
 ## Inside your agent
 
+In Claude Code, install the plugin. It sets up the MCP server below and adds `/codeburn:cost`, which summarizes today's spend:
+
+```
+/plugin install codeburn --marketplace getagentseal/codeburn
+```
+
+Or register only the MCP server:
+
 ```bash
 claude mcp add codeburn -- npx -y codeburn mcp
 ```
@@ -226,6 +234,8 @@ CodeBurn reads files that are already on your disk. There is no account, no API 
 Your prompts, your code and your project names stay on your computer. CodeBurn does not sit between you and your agent, so if it stopped working tomorrow your tools would not notice.
 
 Prices come from [LiteLLM](https://github.com/BerriAI/litellm) and refresh once a day.
+
+Everything that does leave your machine is listed in [Privacy](https://codeburn.app/docs/privacy).
 
 ## Built in the open
 

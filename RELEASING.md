@@ -43,11 +43,12 @@ Every surface's updater reads its own channel, and the menubar and `codeburn upd
 
 1. `npm publish`.
 2. Wait until the tarball downloads: run `npm pack codeburn@<version>` in a temp directory until it writes `codeburn-<version>.tgz`.
-3. Homebrew: `brew bump-formula-pr` (see "Homebrew Core") and bump the tap (CLI step 5b).
-4. GitHub `v<version>` release.
-5. Push `mac-v<version>` (writes `menubar-latest.json`).
-6. Push `windows-v<version>` (writes `windows-latest.json`).
-7. Publish the `desktop-v<version>` release (writes `latest*.yml`).
+3. MCP Registry and Claude Code plugin: set the new version in both `version` fields of `server.json` and in the `codeburn@<version>` pins in `plugins/codeburn/.mcp.json` and `plugins/codeburn/skills/cost/SKILL.md`, and bump `version` in `plugins/codeburn/.claude-plugin/plugin.json`. Then run `mcp-publisher publish` (log in once with `mcp-publisher login github` as an owner of the getagentseal org).
+4. Homebrew: `brew bump-formula-pr` (see "Homebrew Core") and bump the tap (CLI step 5b).
+5. GitHub `v<version>` release.
+6. Push `mac-v<version>` (writes `menubar-latest.json`).
+7. Push `windows-v<version>` (writes `windows-latest.json`).
+8. Publish the `desktop-v<version>` release (writes `latest*.yml`).
 
 Push tags one at a time and wait for each workflow to start. GitHub drops the push events when more than three tags arrive in one push, so `git push --tags` can leave a release with no workflow run.
 
