@@ -930,6 +930,10 @@
 "window running" = "window running";
 "weekly limit reached" = "weekly limit reached";
 "couldn't read Claude usage" = "couldn't read Claude usage";
+"Claude Code is signed out on %@. Run `claude` there and sign in with /login." = "Claude Code is signed out on %@. Run `claude` there and sign in with /login.";
+"Couldn't read Claude usage on %1$@ (%2$@), so nothing was sent" = "Couldn't read Claude usage on %1$@ (%2$@), so nothing was sent";
+"couldn't read Claude usage: %@" = "couldn't read Claude usage: %@";
+"Claude Code is signed out there" = "Claude Code is signed out there";
 "sent; the window wasn't showing yet" = "sent; the window wasn't showing yet";
 "· Auto-warm at %@" = "· Auto-warm at %@";
 "The runner sends one warm right after this window resets, so the next window starts then." = "The runner sends one warm right after this window resets, so the next window starts then.";

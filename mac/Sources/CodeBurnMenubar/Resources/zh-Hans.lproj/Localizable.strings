@@ -921,6 +921,10 @@
 "window running" = "窗口运行中";
 "weekly limit reached" = "已达每周上限";
 "couldn't read Claude usage" = "无法读取 Claude 用量";
+"Claude Code is signed out on %@. Run `claude` there and sign in with /login." = "%@ 上的 Claude Code 已退出登录。请在那里运行 `claude`，并用 /login 登录。";
+"Couldn't read Claude usage on %1$@ (%2$@), so nothing was sent" = "无法读取 %1$@ 上的 Claude 用量（%2$@），因此未发送任何内容";
+"couldn't read Claude usage: %@" = "无法读取 Claude 用量：%@";
+"Claude Code is signed out there" = "那里的 Claude Code 已退出登录";
 "sent; the window wasn't showing yet" = "已发送；窗口尚未显示";
 "· Auto-warm at %@" = "· %@ 自动预热";
 "The runner sends one warm right after this window resets, so the next window starts then." = "此窗口重置后，运行设备会立即发送一次预热，让下一个窗口从那时开始。";

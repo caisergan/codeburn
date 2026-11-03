@@ -522,7 +522,12 @@ final class WindowWarmer {
             return Banner(kind: .failure, message: L("A 5-hour window is already running, so nothing was sent"))
         case (_, "weekly_full"):
             return Banner(kind: .failure, message: L("The weekly limit is used up, so nothing was sent"))
+        case (_, "signed_out"):
+            return Banner(kind: .failure, message: L("Claude Code is signed out on %@. Run `claude` there and sign in with /login.", runner.name))
         case (_, "usage_unavailable"):
+            if let detail = result.detail {
+                return Banner(kind: .failure, message: L("Couldn't read Claude usage on %1$@ (%2$@), so nothing was sent", runner.name, detail))
+            }
             return Banner(kind: .failure, message: L("Couldn't read Claude usage on %@, so nothing was sent", runner.name))
         case (_, "claude_not_found"):
             return Banner(kind: .failure, message: L("Couldn't warm on %1$@: %2$@", runner.name, L("Claude Code isn't installed there")))

@@ -923,6 +923,10 @@
 "window running" = "ウィンドウ進行中";
 "weekly limit reached" = "週間上限に到達";
 "couldn't read Claude usage" = "Claude の使用量を読み取れませんでした";
+"Claude Code is signed out on %@. Run `claude` there and sign in with /login." = "%@ で Claude Code がサインアウトしています。そこで `claude` を実行し、/login でサインインしてください。";
+"Couldn't read Claude usage on %1$@ (%2$@), so nothing was sent" = "%1$@ で Claude の使用量を読み取れなかったため（%2$@）、何も送信していません";
+"couldn't read Claude usage: %@" = "Claude の使用量を読み取れませんでした: %@";
+"Claude Code is signed out there" = "そこで Claude Code がサインアウトしています";
 "sent; the window wasn't showing yet" = "送信済み。ウィンドウはまだ表示されていませんでした";
 "· Auto-warm at %@" = "· %@ に自動ウォーム";
 "The runner sends one warm right after this window resets, so the next window starts then." = "このウィンドウのリセット直後に実行デバイスがウォームを1件送信し、次のウィンドウをその時点から開始します。";

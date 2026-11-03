@@ -128,6 +128,23 @@ struct WindowWarmerTests {
         #expect(banner.message.contains("Not logged in"))
     }
 
+    @Test("A skipped warm says the runner is signed out, or why usage couldn't be read")
+    @MainActor
+    func skipBanners() {
+        let runner = WarmRunner(id: "ab", name: "vm", isLocal: false, state: "ok", status: nil)
+        func skipped(_ reason: String, _ detail: String?) -> WarmNowResponse {
+            WarmNowResponse(state: "ok", result: WarmResultDTO(at: Date(), trigger: "manual", outcome: "skipped", reason: reason, detail: detail, resetsAt: nil, slot: nil))
+        }
+        let signedOut = WindowWarmer.banner(for: skipped("signed_out", "Claude Code is not signed in on this machine"), runner: runner)
+        #expect(signedOut.kind == .failure)
+        #expect(signedOut.message.contains("signed out on vm"))
+        #expect(signedOut.message.contains("/login"))
+
+        let unreadable = WindowWarmer.banner(for: skipped("usage_unavailable", "the usage endpoint answered HTTP 503"), runner: runner)
+        #expect(unreadable.message.contains("HTTP 503"))
+        #expect(WindowWarmer.banner(for: skipped("usage_unavailable", nil), runner: runner).message.contains("vm"))
+    }
+
     private func status(version: Int) -> WarmStatusDTO {
         WarmStatusDTO(version: version, allowed: true, claudeFound: true, signedIn: true, warming: false, schedule: nil, history: [])
     }

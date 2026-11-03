@@ -179,7 +179,14 @@ async function request(token: string, deps: ClaudeDeps, parent?: AbortSignal): P
   })
 }
 
-export type ClaudeResult = { quota: QuotaProvider; retryAfterSeconds?: number }
+export type ClaudeResult = {
+  quota: QuotaProvider
+  retryAfterSeconds?: number
+  /** The usage endpoint's HTTP status when it answered with an error. */
+  httpStatus?: number
+  /** Why the request itself failed (network, parse), sanitized. Never holds a token. */
+  error?: string
+}
 
 export async function fetchClaudeQuota(options: Partial<ClaudeDeps> & { signal?: AbortSignal; allowKeychain?: boolean; configDir?: string } = {}): Promise<ClaudeResult> {
   const configDir = options.configDir ?? path.join(os.homedir(), '.claude')
@@ -211,7 +218,7 @@ export async function fetchClaudeQuota(options: Partial<ClaudeDeps> & { signal?:
         // consumers are meant to retry and to keep their last numbers through. A
         // token that has not expired is a real blip and keeps that backoff.
         const expired = credential.expiresAt !== undefined && credential.expiresAt <= deps.now()
-        return { quota: expired ? empty('terminalFailure', EXPIRED_FOOTER) : empty('transientFailure') }
+        return { quota: expired ? empty('terminalFailure', EXPIRED_FOOTER) : empty('transientFailure'), httpStatus: 401 }
       }
       credential = reread
       response = await request(credential.accessToken, deps, options.signal)
@@ -220,13 +227,14 @@ export async function fetchClaudeQuota(options: Partial<ClaudeDeps> & { signal?:
       let hint: unknown
       try { hint = (await response.json() as Record<string, unknown>).retry_after } catch { hint = undefined }
       const parsed = typeof hint === 'number' ? hint : typeof hint === 'string' ? Number(hint) : NaN
-      return { quota: empty('transientFailure'), retryAfterSeconds: Math.max(Number.isFinite(parsed) ? parsed : 300, 60) }
+      return { quota: empty('transientFailure'), retryAfterSeconds: Math.max(Number.isFinite(parsed) ? parsed : 300, 60), httpStatus: 429 }
     }
-    if (!response.ok) return { quota: empty(response.status >= 400 && response.status < 500 ? 'terminalFailure' : 'transientFailure') }
+    if (!response.ok) return { quota: empty(response.status >= 400 && response.status < 500 ? 'terminalFailure' : 'transientFailure'), httpStatus: response.status }
     return { quota: decodeClaudeUsage(await response.json(), credential) }
   } catch (error) {
     // Deliberately sanitize before the only diagnostic sink. Tokens are never returned.
-    console.warn(`Claude quota unavailable: ${sanitizeError(error)}`)
-    return { quota: empty('transientFailure') }
+    const reason = sanitizeError(error)
+    console.warn(`Claude quota unavailable: ${reason}`)
+    return { quota: empty('transientFailure'), error: reason }
   }
 }

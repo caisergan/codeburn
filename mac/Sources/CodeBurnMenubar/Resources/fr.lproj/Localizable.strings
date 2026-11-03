@@ -923,6 +923,10 @@
 "window running" = "fenêtre en cours";
 "weekly limit reached" = "limite hebdomadaire atteinte";
 "couldn't read Claude usage" = "utilisation de Claude illisible";
+"Claude Code is signed out on %@. Run `claude` there and sign in with /login." = "Claude Code est déconnecté sur %@. Lancez `claude` sur cet appareil et connectez-vous avec /login.";
+"Couldn't read Claude usage on %1$@ (%2$@), so nothing was sent" = "Impossible de lire l’utilisation de Claude sur %1$@ (%2$@), rien n’a été envoyé";
+"couldn't read Claude usage: %@" = "utilisation de Claude illisible : %@";
+"Claude Code is signed out there" = "Claude Code y est déconnecté";
 "sent; the window wasn't showing yet" = "envoyé ; la fenêtre n’apparaissait pas encore";
 "· Auto-warm at %@" = "· Préchauffage auto à %@";
 "The runner sends one warm right after this window resets, so the next window starts then." = "L’appareil envoie un préchauffage juste après la réinitialisation de cette fenêtre, pour que la suivante commence à ce moment-là.";
