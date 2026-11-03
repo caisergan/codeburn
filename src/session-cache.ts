@@ -438,8 +438,11 @@ export const PROVIDER_PARSE_VERSIONS: Record<string, string> = {
   // 'standard'), and `gpt-reserve` now splits cache writes like GPT-5.6 Luna.
   // codex-fork-mask-v1: a fork's replay burst drops only records the parent
   // rollout holds, so cached forks that dropped the whole burst re-parse.
+  // native-tool-events-v1: capture built-in Responses tools and item-model
+  // WebSearch mirrors, preserving the first observed item identity across
+  // cached turns and append checkpoints.
   // Compose every suffix so cached sessions receive all accounting fixes.
-  codex: 'mcp-attribution-v5-est-cost-active-timing-mcp-wait-rich-capture-v1-cross-provider-pr-v1-session-meta-model-v1-session-meta-fields-v1-codex-pricing-v1-codex-tps-v1-codex-mcp-skills-v1-activity-price-v1-fork-replay-burst-v1-codex-token-usage-record-v1-codex-priority-tier-v1-codex-auto-review-date-v1-codex-flex-reserve-v1-codex-fork-mask-v1',
+  codex: 'mcp-attribution-v5-est-cost-active-timing-mcp-wait-rich-capture-v1-cross-provider-pr-v1-session-meta-model-v1-session-meta-fields-v1-codex-pricing-v1-codex-tps-v1-codex-mcp-skills-v1-activity-price-v1-fork-replay-burst-v1-codex-token-usage-record-v1-codex-priority-tier-v1-codex-auto-review-date-v1-codex-flex-reserve-v1-codex-fork-mask-v1-native-tool-events-v1',
   // reported-cost-v1: cached Crush calls stored costUSD: undefined and must
   // re-parse to keep the recorded session cost.
   crush: 'reported-cost-v1',
@@ -503,7 +506,10 @@ export const PROVIDER_PARSE_VERSIONS: Record<string, string> = {
   // anthropic-auto fallback; cached entries must re-parse once.
   // chatsession-agent-totals-v1: chat-session requests read every agent round
   // (modelTotals, root completionTokens) and copilotCredits as nanoAiu.
-  copilot: 'cli-shutdown-cost-v1-skills-source-provenance-v1-session-store-v3-chatsession-otel-skills-v1-otel-trace-metadata-once-v1-transcript-unknown-usage-v1-otel-workspace-project-v1-journal-request-input-v1-tokenless-turns-v1-store-row-output-v1-jetbrains-opus-4-7-v1-chatsession-agent-totals-v1',
+  // otel-cache-inclusive-input-v1: cached OTel calls hold inputTokens with
+  // cache reads and writes still inside it, so they must re-parse. Calls whose
+  // spans agent-traces.db already pruned keep the old input.
+  copilot: 'cli-shutdown-cost-v1-skills-source-provenance-v1-session-store-v3-chatsession-otel-skills-v1-otel-trace-metadata-once-v1-transcript-unknown-usage-v1-otel-workspace-project-v1-journal-request-input-v1-tokenless-turns-v1-store-row-output-v1-jetbrains-opus-4-7-v1-chatsession-agent-totals-v1-otel-cache-inclusive-input-v1',
   // authoritative-usage-v4: persist one Grok session call from top-level
   // authoritative totals, use modelUsage only for priced attribution, clamp
   // reasoning per record, and label mixed sessions estimated.

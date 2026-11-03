@@ -1774,6 +1774,7 @@ final class AppDelegate: NSObject, NSApplicationDelegate, NSPopoverDelegate, NSM
                 popover.contentViewController = makePopoverContent()
             }
             store.menuPopoverVisible = true
+            StarNudge.countOpen()
             Telemetry.shared.track("popover_open")
             popover.show(relativeTo: button.bounds, of: button, preferredEdge: .minY)
             if let window = popover.contentViewController?.view.window {
