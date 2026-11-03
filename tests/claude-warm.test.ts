@@ -4,7 +4,10 @@ import { join } from 'path'
 import { afterEach, beforeEach, describe, expect, it, vi } from 'vitest'
 
 import {
+  automaticStartsOn,
+  dueAutoWarm,
   dueSlot,
+  inActiveHours,
   loadWarmState,
   localParts,
   parseSchedule,
@@ -14,8 +17,11 @@ import {
   startWarmScheduler,
   WARM_ARGS,
   type FiveHourReading,
+  trackWindow,
   type SendResult,
+  type WarmResult,
   type WarmSchedule,
+  type WarmState,
 } from '../src/claude-warm.js'
 
 const schedule = (over: Partial<WarmSchedule> = {}): WarmSchedule => ({
@@ -23,6 +29,7 @@ const schedule = (over: Partial<WarmSchedule> = {}): WarmSchedule => ({
   times: ['07:00', '12:00'],
   days: [0, 1, 2, 3, 4, 5, 6],
   timeZone: 'Europe/Istanbul',
+  auto: { enabled: false, from: '07:00', to: '24:00' },
   ...over,
 })
 
@@ -33,7 +40,17 @@ describe('parseSchedule', () => {
       times: ['07:00', '12:00', '23:50'],
       days: [0, 4],
       timeZone: 'UTC',
+      auto: { enabled: false, from: '07:00', to: '24:00' },
     })
+  })
+
+  it('reads auto-warm, with 24:00 as the end of the day', () => {
+    const base = { enabled: false, times: [], days: [], timeZone: 'UTC' }
+    expect(parseSchedule({ ...base, auto: { enabled: true, from: '07:00', to: '24:00' } })?.auto).toEqual({ enabled: true, from: '07:00', to: '24:00' })
+    expect(parseSchedule({ ...base, auto: { enabled: true } })?.auto).toEqual({ enabled: true, from: '07:00', to: '24:00' })
+    expect(parseSchedule({ ...base, auto: { enabled: true, from: '23:00', to: '07:00' } })).toBeNull()
+    expect(parseSchedule({ ...base, auto: { enabled: 'yes' } })).toBeNull()
+    expect(parseSchedule({ ...base, auto: { enabled: true, from: '24:00', to: '24:00' } })).toBeNull()
   })
 
   it('rejects more than four times, bad days, bad times and unknown zones', () => {
@@ -83,7 +100,7 @@ describe('performWarm', () => {
 
   it('sends nothing while a window runs', async () => {
     const send = vi.fn<() => Promise<SendResult>>()
-    const res = await performWarm({ trigger: 'manual' }, { ...base, readFiveHour: readings({ state: 'running', resetsAt: '2026-10-31T09:00:00Z' }), send })
+    const res = await performWarm({ trigger: 'manual' }, { ...base, readFiveHour: readings({ state: 'running', resetsAt: '2026-10-31T09:00:00Z', percent: 0.1 }), send })
     expect(send).not.toHaveBeenCalled()
     expect(res).toMatchObject({ outcome: 'skipped', reason: 'window_running', resetsAt: '2026-10-31T09:00:00Z' })
   })
@@ -101,7 +118,7 @@ describe('performWarm', () => {
     const send = vi.fn<() => Promise<SendResult>>().mockResolvedValue({ ok: true })
     const res = await performWarm(
       { trigger: 'scheduled', slot: '2026-10-31 07:00' },
-      { ...base, readFiveHour: readings({ state: 'idle' }, { state: 'idle' }, { state: 'running', resetsAt: '2026-10-31T09:00:00Z' }), send },
+      { ...base, readFiveHour: readings({ state: 'idle' }, { state: 'idle' }, { state: 'running', resetsAt: '2026-10-31T09:00:00Z', percent: 0.1 }), send },
     )
     expect(send).toHaveBeenCalledTimes(1)
     expect(res).toMatchObject({ outcome: 'started', reason: null, resetsAt: '2026-10-31T09:00:00Z', slot: '2026-10-31 07:00', trigger: 'scheduled' })
@@ -109,7 +126,7 @@ describe('performWarm', () => {
 
   it('rides out a failed reading', async () => {
     const send = vi.fn<() => Promise<SendResult>>().mockResolvedValue({ ok: true })
-    const res = await performWarm({ trigger: 'scheduled' }, { ...base, readFiveHour: readings({ state: 'unknown' }, { state: 'idle' }, { state: 'running', resetsAt: '2026-10-31T09:00:00Z' }), send })
+    const res = await performWarm({ trigger: 'scheduled' }, { ...base, readFiveHour: readings({ state: 'unknown' }, { state: 'idle' }, { state: 'running', resetsAt: '2026-10-31T09:00:00Z', percent: 0.1 }), send })
     expect(send).toHaveBeenCalledTimes(1)
     expect(res).toMatchObject({ outcome: 'started', resetsAt: '2026-10-31T09:00:00Z' })
   })
@@ -141,7 +158,7 @@ describe('performWarm', () => {
 
   it('does not retry when the window started meanwhile', async () => {
     const send = vi.fn<() => Promise<SendResult>>().mockResolvedValue({ ok: false, reason: 'send_failed', detail: null, network: true })
-    const res = await performWarm({ trigger: 'scheduled' }, { ...base, readFiveHour: readings({ state: 'idle' }, { state: 'running', resetsAt: null }), send })
+    const res = await performWarm({ trigger: 'scheduled' }, { ...base, readFiveHour: readings({ state: 'idle' }, { state: 'running', resetsAt: null, percent: 0.1 }), send })
     expect(send).toHaveBeenCalledTimes(1)
     expect(res).toMatchObject({ outcome: 'skipped', reason: 'window_running' })
   })
@@ -195,12 +212,122 @@ describe('state, runWarm and the scheduler', () => {
       now = new Date('2026-10-31T07:05:00Z')
       await scheduler.tick()
       expect(warm).toHaveBeenCalledTimes(1)
-      expect(warm).toHaveBeenCalledWith('2026-10-31 07:00')
+      expect(warm).toHaveBeenCalledWith('2026-10-31 07:00', 'scheduled')
       now = new Date('2026-11-01T07:02:00Z')
       await scheduler.tick()
       expect(warm).toHaveBeenCalledTimes(2)
     } finally {
       scheduler.stop()
     }
+  })
+
+  it('reads usage every 15 minutes with auto-warm on and warms once after the reset', async () => {
+    await setWarmSchedule(schedule({ enabled: false, times: [], timeZone: 'UTC', auto: { enabled: true, from: '07:00', to: '24:00' } }), path)
+    const warm = vi.fn(async () => {})
+    let reading: FiveHourReading = { state: 'running', resetsAt: '2026-10-31T15:00:00Z', percent: 0.35 }
+    const read = vi.fn(async () => reading)
+    let now = new Date('2026-10-31T13:00:00Z')
+    const scheduler = startWarmScheduler({ statePath: path, now: () => now, intervalMs: 60 * 60_000, warm, read })
+    try {
+      await scheduler.tick()
+      expect(read).toHaveBeenCalledTimes(1)
+      expect((await loadWarmState(path)).currentWindow).toEqual({ resetsAt: '2026-10-31T15:00:00.000Z', maxPercent: 0.35 })
+      now = new Date('2026-10-31T13:10:00Z')
+      await scheduler.tick()
+      expect(read).toHaveBeenCalledTimes(1)
+      reading = { state: 'idle' }
+      now = new Date('2026-10-31T15:01:00Z')
+      await scheduler.tick()
+      expect(warm).toHaveBeenCalledTimes(1)
+      expect(warm).toHaveBeenCalledWith('auto:2026-10-31T15:00:00.000Z', 'auto')
+      // Marked fired before the warm, so a restarted scheduler does not send again.
+      scheduler.stop()
+      const again = startWarmScheduler({ statePath: path, now: () => now, intervalMs: 60 * 60_000, warm, read })
+      await again.tick()
+      again.stop()
+      expect(warm).toHaveBeenCalledTimes(1)
+    } finally {
+      scheduler.stop()
+    }
+  })
+
+  it('does not read usage while auto-warm is off', async () => {
+    await setWarmSchedule(schedule({ timeZone: 'UTC', times: ['07:00'] }), path)
+    const read = vi.fn(async (): Promise<FiveHourReading> => ({ state: 'idle' }))
+    const scheduler = startWarmScheduler({ statePath: path, now: () => new Date('2026-10-31T13:00:00Z'), intervalMs: 60 * 60_000, warm: vi.fn(async () => {}), read })
+    try {
+      await scheduler.tick()
+      expect(read).not.toHaveBeenCalled()
+    } finally {
+      scheduler.stop()
+    }
+  })
+})
+
+describe('auto-warm', () => {
+  const auto = schedule({ enabled: false, times: [], timeZone: 'UTC', auto: { enabled: true, from: '07:00', to: '24:00' } })
+  const state = (over: Partial<WarmState> = {}): WarmState => ({
+    schedule: auto,
+    history: [],
+    firedSlots: [],
+    currentWindow: { resetsAt: '2026-10-31T15:00:00.000Z', maxPercent: 0.4 },
+    ...over,
+  })
+  const started = (at: string, trigger: WarmResult['trigger'] = 'auto'): WarmResult => ({
+    at, trigger, outcome: 'started', reason: null, detail: null, resetsAt: null, slot: null,
+  })
+
+  it('fires from one minute after the reset until ten minutes after', () => {
+    expect(dueAutoWarm(state(), new Date('2026-10-31T15:00:59Z'))).toBeNull()
+    expect(dueAutoWarm(state(), new Date('2026-10-31T15:01:00Z'))).toEqual({ key: 'auto:2026-10-31T15:00:00.000Z', resetsAt: '2026-10-31T15:00:00.000Z' })
+    expect(dueAutoWarm(state(), new Date('2026-10-31T15:10:00Z'))).not.toBeNull()
+    expect(dueAutoWarm(state(), new Date('2026-10-31T15:10:01Z'))).toBeNull()
+  })
+
+  it('needs auto-warm on, a tracked window and an unfired reset', () => {
+    const at = new Date('2026-10-31T15:02:00Z')
+    expect(dueAutoWarm(state({ schedule: { ...auto, auto: { ...auto.auto, enabled: false } } }), at)).toBeNull()
+    expect(dueAutoWarm(state({ schedule: null }), at)).toBeNull()
+    expect(dueAutoWarm(state({ currentWindow: null }), at)).toBeNull()
+    expect(dueAutoWarm(state({ firedSlots: ['auto:2026-10-31T15:00:00.000Z'] }), at)).toBeNull()
+  })
+
+  it('only continues a window that read above 2%', () => {
+    const at = new Date('2026-10-31T15:02:00Z')
+    expect(dueAutoWarm(state({ currentWindow: { resetsAt: '2026-10-31T15:00:00.000Z', maxPercent: 0.02 } }), at)).toBeNull()
+    expect(dueAutoWarm(state({ currentWindow: { resetsAt: '2026-10-31T15:00:00.000Z', maxPercent: 0.03 } }), at)).not.toBeNull()
+  })
+
+  it('keeps to the active hours in the schedule zone', () => {
+    const istanbul = { ...auto, timeZone: 'Europe/Istanbul' }
+    // Istanbul is +03: 04:00Z is 07:00, 03:59Z is 06:59, 20:50Z is 23:50, 21:00Z is 00:00.
+    expect(inActiveHours(istanbul, new Date('2026-10-31T03:59:00Z'))).toBe(false)
+    expect(inActiveHours(istanbul, new Date('2026-10-31T04:00:00Z'))).toBe(true)
+    expect(inActiveHours(istanbul, new Date('2026-10-31T20:50:00Z'))).toBe(true)
+    expect(inActiveHours(istanbul, new Date('2026-10-31T21:00:00Z'))).toBe(false)
+    const night = state({ schedule: istanbul, currentWindow: { resetsAt: '2026-10-31T21:00:00.000Z', maxPercent: 0.5 } })
+    expect(dueAutoWarm(night, new Date('2026-10-31T21:02:00Z'))).toBeNull()
+  })
+
+  it('stops at five automatic starts a day; manual warms do not count', () => {
+    const at = new Date('2026-10-31T15:02:00Z')
+    const four = ['01:00', '06:00', '09:00', '10:00'].map(t => started(`2026-10-31T${t}:00Z`, 'scheduled'))
+    expect(dueAutoWarm(state({ history: four }), at)).not.toBeNull()
+    expect(dueAutoWarm(state({ history: [...four, started('2026-10-31T10:30:00Z')] }), at)).toBeNull()
+    expect(dueAutoWarm(state({ history: [...four, started('2026-10-31T10:30:00Z', 'manual')] }), at)).not.toBeNull()
+    // Yesterday's starts belong to yesterday.
+    expect(automaticStartsOn([...four, started('2026-10-30T10:30:00Z')], at, 'UTC')).toBe(4)
+  })
+
+  it('tracks the highest reading of a window and starts over on a new one', () => {
+    const running = (resetsAt: string, percent: number): FiveHourReading => ({ state: 'running', resetsAt, percent })
+    let window = trackWindow(null, running('2026-10-31T15:00:00.400Z', 0.1))
+    expect(window).toEqual({ resetsAt: '2026-10-31T15:00:00.000Z', maxPercent: 0.1 })
+    // A few seconds of jitter is still the same window.
+    window = trackWindow(window, running('2026-10-31T14:59:58Z', 0.3))
+    window = trackWindow(window, running('2026-10-31T15:00:00Z', 0.2))
+    expect(window).toEqual({ resetsAt: '2026-10-31T15:00:00.000Z', maxPercent: 0.3 })
+    expect(trackWindow(window, { state: 'idle' })).toBe(window)
+    expect(trackWindow(window, running('2026-10-31T20:00:00Z', 0.01))).toEqual({ resetsAt: '2026-10-31T20:00:00.000Z', maxPercent: 0.01 })
   })
 })

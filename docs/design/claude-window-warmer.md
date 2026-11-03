@@ -1,7 +1,8 @@
 # Claude window warmer
 
-Status: implemented (V1, 2026-10-31). Where the build settled a detail the
-spec left open, see Implementation notes at the end.
+Status: V1 implemented (2026-10-31); V2 auto-warm implemented (2026-11-03), see
+the end. Where the build settled a detail the spec left open, see
+Implementation notes at the end.
 
 Surface: native macOS menu bar (`mac/`), with the scheduler and the warm itself
 in the CLI (`src/`), normally running on a paired always-on device.
@@ -289,3 +290,119 @@ Window Warmer
   and marks it fired before sending, so a restart never sends twice.
 - **VM setup (2026-10-31)**: the share runs in the tmux session `codeburn`,
   inside a shell, as `~/.npm-global/bin/codeburn share --always --allow-warm`.
+
+## V2: Auto-warm after reset
+
+Status: agreed 2026-10-31, implemented 2026-11-03.
+
+### What it does
+
+When the current 5-hour window resets, the runner sends the usual single warm
+message right away, so the next window starts at the reset instead of at the
+next real message.
+
+Example: the limit is hit at 13:00, the window resets at 15:00, and work resumes
+at 16:30. Without auto-warm the next window is 16:30–21:30. With it the window
+is 15:00–20:00, so if it is used up again, a fresh one comes 1.5 hours sooner.
+
+### The VM runs everything
+
+Every automatic warm and every manual warm runs on the paired device (the VM),
+so all of it works while the Mac is asleep or off.
+
+- **Runner**: the paired device that can warm. The Run on picker and the "This
+  Mac" runner go away when such a device exists. This Mac is used only when no
+  paired device can warm (a user without a VM), and then only while it is awake.
+- **Warm button**: always asks the VM (`POST /api/claude-warm/now`), never
+  this Mac. The failure banner no longer offers "Warm on this Mac".
+- **Auto-warm**: runs only in the VM's share process. On This Mac it is not
+  offered.
+
+### Rules
+
+An auto-warm is sent at a reset only when all of these hold:
+
+1. **Auto-warm is on.**
+2. **Active hours**: the reset falls between 07:00 and 24:00 in the schedule's
+   time zone (from inclusive, to exclusive, so a 23:50 reset fires and a 00:00
+   reset does not). The chain stops overnight. Hours are fixed in V1, not
+   editable.
+3. **The window that just ended was really used**: its highest reading was above
+   2%. A window that only a warm started is never extended, so an idle day ends
+   after one window instead of chaining all day. This rule is always on and has
+   no switch.
+4. **Daily cap**: fewer than 5 warms (scheduled + auto, not manual) have started
+   a window today, in the schedule's zone.
+5. **Idle at the reset**: the usual idle check passes (a weekly limit that is
+   used up, or a usage reading that fails, skips the warm as before).
+
+Rules 2–4 are about the terms: chaining without them would keep a window running
+around the clock, about 5 warms a day, on days nobody uses Claude. With them,
+auto-warm only continues real use, inside the user's working hours.
+
+### How the VM knows when a window resets
+
+Today the VM reads usage only at scheduled times. With auto-warm on:
+
+- **Tracking**: every reading that shows a running window stores
+  `{ resetsAt, maxPercent }` for the current window in the warm state file.
+  That includes readings taken by warms and by the Warm button.
+- **Background reads**: while auto-warm is on, the VM reads usage every 15
+  minutes, so it also learns about windows started by real use on any device.
+  It is the same read-only request the Plan view makes.
+- **Firing**: at `resetsAt` + 1 minute the scheduler checks the rules above,
+  marks the reset as fired (key `auto:<resetsAt>`, alongside the fired slots,
+  so a restart never sends twice) and runs `runWarm({ trigger: 'auto' })`.
+- **Late**: if the VM was down at the reset and comes back more than 10 minutes
+  later, the reset is skipped, not warmed late.
+- A skipped auto-warm is recorded in history only when it was skipped at the
+  reset itself (window running, weekly full, usage unavailable). Resets outside
+  active hours, after an unused window, or over the cap record nothing.
+- A scheduled time and an auto-warm due together send one message: `runWarm`
+  already shares an in-flight warm.
+
+### Wire and state
+
+- The schedule gains `auto: { enabled: boolean, from: "07:00", to: "24:00" }`.
+  `WARM_STATUS_VERSION` becomes 2. A device reporting version 1 is shown in
+  Settings with "Update CodeBurn on <device> to use auto-warm", and the Mac does
+  not keep re-pushing a schedule the old build drops.
+- The warm state gains `currentWindow: { resetsAt, maxPercent } | null`.
+- `WarmTrigger` gains `'auto'`; history shows it as "auto".
+
+### Menu bar
+
+Settings › Claude › Window Warmer:
+
+```
+Window Warmer
+  Runs on instance-20260829-212457 · ● Ready · last warm 15:00 auto, started
+  Warm on schedule                                   [  ON ]
+  Warm again right after each reset                  [  ON ]
+    Between 07:00 and 24:00, only after a window you used, at most 5 a day.
+  Start a window at
+    …
+```
+
+Plan header, while a window is running and auto-warm will fire at its reset
+(on, reset inside active hours, current reading above 2%, under the cap):
+
+```
+Max 5x              [🔥 Warm]   Resets in 1h 20m · Auto-warm at 15:00
+```
+
+When one of those does not hold, only "Resets in" is shown.
+
+### CLI
+
+`codeburn warm schedule --set '<json>'` accepts the `auto` field.
+`codeburn warm status` shows auto-warm, the tracked window and when it fires.
+
+### Tests
+
+- Rules: active-hours edges (06:59, 07:00, 23:50, 00:00), the 2% threshold, the
+  cap, and the 10-minute late limit.
+- Tracking keeps the highest reading and resets it when `resetsAt` changes.
+- Fired-reset key prevents a second send after a restart.
+- Mac: the header label's conditions, the version-1 device note, and the Warm
+  button never using This Mac when a paired runner exists.

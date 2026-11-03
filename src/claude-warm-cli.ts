@@ -3,7 +3,7 @@
 
 import { hostname } from 'os'
 
-import { buildWarmStatus, runWarm, setWarmSchedule, type WarmResult } from './claude-warm.js'
+import { buildWarmStatus, runWarm, setWarmSchedule, type WarmResult, type WarmStatus } from './claude-warm.js'
 import { findRemote, listWarmDevices, pushWarmSchedule, warmOnDevice, warmStatusOf } from './sharing/claude-warm-peers.js'
 
 export type WarmCommandOptions = {
@@ -45,6 +45,21 @@ export function describeResult(result: WarmResult): string {
   }
 }
 
+function describeStatus(status: WarmStatus | null): string {
+  const schedule = status?.schedule
+  if (!schedule) return ''
+  let text = ` · schedule ${schedule.enabled ? 'on' : 'off'} ${schedule.times.join(', ')}`
+  // A version-1 device has no auto-warm; its schedule comes back without it.
+  if (schedule.auto) {
+    text += ` · auto-warm ${schedule.auto.enabled ? `on ${schedule.auto.from}–${schedule.auto.to}` : 'off'}`
+    const window = status.currentWindow
+    if (schedule.auto.enabled && window) {
+      text += ` · window resets ${clock(window.resetsAt)}, highest ${Math.round(window.maxPercent * 100)}%`
+    }
+  }
+  return text
+}
+
 export async function runWarmCommand(action: string | undefined, opts: WarmCommandOptions): Promise<void> {
   const remote = opts.device ? await findRemote(opts.device) : null
   if (opts.device && !remote) fail(`no paired device named "${opts.device}". See \`codeburn devices\`.`)
@@ -53,14 +68,14 @@ export async function runWarmCommand(action: string | undefined, opts: WarmComma
   if (action === 'status') {
     if (remote) {
       const device = await warmStatusOf(remote)
-      out(opts.format, device, `${device.name}: ${device.state}${device.status?.schedule ? ` · schedule ${device.status.schedule.enabled ? 'on' : 'off'} ${device.status.schedule.times.join(', ')}` : ''}`)
+      out(opts.format, device, `${device.name}: ${device.state}${describeStatus(device.status)}`)
       return
     }
     const local = await buildWarmStatus({ allowed: true })
     const devices = opts.devices ? await listWarmDevices() : []
     const lines = [
-      `This machine: claude ${local.claudeFound ? 'found' : 'not found'}${local.schedule ? ` · schedule ${local.schedule.enabled ? 'on' : 'off'} ${local.schedule.times.join(', ')}` : ''}`,
-      ...devices.map(d => `${d.name}: ${d.state}${d.status?.schedule ? ` · schedule ${d.status.schedule.enabled ? 'on' : 'off'} ${d.status.schedule.times.join(', ')}` : ''}`),
+      `This machine: claude ${local.claudeFound ? 'found' : 'not found'}${describeStatus(local)}`,
+      ...devices.map(d => `${d.name}: ${d.state}${describeStatus(d.status)}`),
       ...local.history.slice(0, 5).map(r => `  ${new Date(r.at).toLocaleString()} ${r.trigger}: ${describeResult(r)}`),
     ]
     out(opts.format, { local, devices }, lines.join('\n'))
@@ -82,8 +97,8 @@ export async function runWarmCommand(action: string | undefined, opts: WarmComma
       return
     }
     const schedule = await setWarmSchedule(parsed)
-    if (!schedule) fail('invalid schedule: needs enabled, times ("HH:MM", at most 4), days (0 = Monday … 6 = Sunday) and a valid timeZone.')
-    out(opts.format, { runner, state: 'ok', schedule }, `Schedule saved: ${schedule.enabled ? 'on' : 'off'} ${schedule.times.join(', ')}`)
+    if (!schedule) fail('invalid schedule: needs enabled, times ("HH:MM", at most 4), days (0 = Monday … 6 = Sunday), a valid timeZone and optionally auto ({ enabled, from: "HH:MM", to: "HH:MM" or "24:00" }).')
+    out(opts.format, { runner, state: 'ok', schedule }, `Schedule saved: ${schedule.enabled ? 'on' : 'off'} ${schedule.times.join(', ')} · auto-warm ${schedule.auto.enabled ? 'on' : 'off'}`)
     return
   }
 

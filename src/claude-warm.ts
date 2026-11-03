@@ -13,7 +13,8 @@ import { writeFileAtomic } from './claude-limit-sources.js'
 import { getConfigFilePath } from './config.js'
 import { fetchClaudeQuota } from './quota/claude.js'
 
-export const WARM_STATUS_VERSION = 1
+/// 2: auto-warm after reset (`schedule.auto`, `currentWindow`).
+export const WARM_STATUS_VERSION = 2
 /// A day holds 4.8 five-hour windows, so more times than this can only overlap.
 export const MAX_WARM_TIMES = 4
 const WINDOW_MS = 5 * 60 * 60 * 1000
@@ -33,6 +34,23 @@ const CONFIRM_INTERVAL_MS = 4000
 const READ_RETRIES = 2
 const READ_RETRY_MS = 5000
 
+/// Auto-warm: the hours a reset may fall in (local, from inclusive, to
+/// exclusive), so the chain stops overnight. Fixed in V1.
+export const AUTO_FROM = '07:00'
+export const AUTO_TO = '24:00'
+/// The window that just ended must have read above this (2%) to be continued,
+/// so a window only a warm started is never extended.
+export const AUTO_MIN_PERCENT = 0.02
+/// Warms (scheduled + auto) that may start a window per local day.
+export const AUTO_DAILY_CAP = 5
+/// An auto-warm fires this long after the reset, so the endpoint has moved on.
+const AUTO_DELAY_MS = 60_000
+/// A reset found later than this (the runner was down) is skipped, not warmed late.
+const AUTO_LATE_MS = 10 * 60_000
+/// How often usage is read while auto-warm is on, to learn the reset times of
+/// windows started by real use.
+const AUTO_POLL_MS = 15 * 60_000
+
 /// The message. Short, real, and answerable without tools.
 export const WARM_PROMPT = 'Reply with OK.'
 /// The prompt goes on stdin. Everything optional is switched off so the
@@ -48,8 +66,16 @@ export const WARM_ARGS = [
   '--no-session-persistence',
 ]
 
+export type AutoWarm = {
+  enabled: boolean
+  /// "HH:MM"; `to` may be "24:00".
+  from: string
+  to: string
+}
+
 /// 0 = Monday … 6 = Sunday.
 export type WarmSchedule = {
+  /// The times below; auto-warm has its own switch.
   enabled: boolean
   /// Local "HH:MM" times on 10-minute marks, sorted, at most MAX_WARM_TIMES.
   times: string[]
@@ -57,9 +83,11 @@ export type WarmSchedule = {
   /// IANA zone the times are in (the Mac's), so a runner in UTC fires at the
   /// user's local time.
   timeZone: string
+  /// Warm again right after each reset. Absent from version-1 senders.
+  auto: AutoWarm
 }
 
-export type WarmTrigger = 'manual' | 'scheduled'
+export type WarmTrigger = 'manual' | 'scheduled' | 'auto'
 export type WarmOutcome = 'started' | 'skipped' | 'failed'
 /// Machine-readable why, localized by the app.
 export type WarmReason =
@@ -79,19 +107,30 @@ export type WarmResult = {
   detail: string | null
   /// The new (started) or running (skipped) window's reset time.
   resetsAt: string | null
-  /// "YYYY-MM-DD HH:MM" in the schedule's zone, for scheduled warms.
+  /// "YYYY-MM-DD HH:MM" in the schedule's zone for scheduled warms,
+  /// "auto:<reset ISO time>" for auto-warms.
   slot: string | null
+}
+
+/// The 5-hour window the runner last saw running, and its highest reading
+/// (a fraction), for auto-warm's "only after a window you used" rule.
+export type TrackedWindow = {
+  resetsAt: string
+  maxPercent: number
 }
 
 export type WarmState = {
   schedule: WarmSchedule | null
   history: WarmResult[]
+  /// Scheduled slots ("YYYY-MM-DD HH:MM") and auto resets ("auto:<iso>")
+  /// already fired.
   firedSlots: string[]
+  currentWindow: TrackedWindow | null
 }
 
 export type FiveHourReading =
   | { state: 'idle' }
-  | { state: 'running'; resetsAt: string | null }
+  | { state: 'running'; resetsAt: string | null; percent: number }
   | { state: 'weekly_full'; resetsAt: string | null }
   | { state: 'unknown' }
 
@@ -117,6 +156,11 @@ function minutesOf(time: string): number | null {
   const min = Number(m[2])
   if (h > 23 || min > 59) return null
   return h * 60 + min
+}
+
+/// Like minutesOf, but also accepts "24:00" (the end of the day).
+function boundaryMinutesOf(time: string): number | null {
+  return time === '24:00' ? 24 * 60 : minutesOf(time)
 }
 
 function hhmm(minutes: number): string {
@@ -145,12 +189,29 @@ export function parseSchedule(input: unknown): WarmSchedule | null {
     if (typeof d !== 'number' || !Number.isInteger(d) || d < 0 || d > 6) return null
     days.add(d)
   }
+  const auto = parseAuto(raw.auto)
+  if (!auto) return null
   return {
     enabled: raw.enabled,
     times: [...minutes].sort((a, b) => a - b).map(hhmm),
     days: [...days].sort((a, b) => a - b),
     timeZone: raw.timeZone,
+    auto,
   }
+}
+
+/// Missing (a version-1 sender or file) means off with the default hours.
+function parseAuto(input: unknown): AutoWarm | null {
+  if (input === undefined || input === null) return { enabled: false, from: AUTO_FROM, to: AUTO_TO }
+  if (typeof input !== 'object') return null
+  const raw = input as Record<string, unknown>
+  if (typeof raw.enabled !== 'boolean') return null
+  const from = typeof raw.from === 'string' ? raw.from : AUTO_FROM
+  const to = typeof raw.to === 'string' ? raw.to : AUTO_TO
+  const a = minutesOf(from)
+  const b = boundaryMinutesOf(to)
+  if (a === null || b === null || a >= b) return null
+  return { enabled: raw.enabled, from: hhmm(a), to: b === 24 * 60 ? '24:00' : hhmm(b) }
 }
 
 const WEEKDAYS: Record<string, number> = { Mon: 0, Tue: 1, Wed: 2, Thu: 3, Fri: 4, Sat: 5, Sun: 6 }
@@ -187,6 +248,65 @@ export function dueSlot(schedule: WarmSchedule, now: Date): { slot: string; time
   return null
 }
 
+// ---------------------------------------------------------------- auto-warm
+
+/// Reset times from the endpoint are compared to the minute, so a few
+/// seconds' jitter between readings is still the same window.
+function windowKey(resetsAt: string): string | null {
+  const ms = Date.parse(resetsAt)
+  if (!Number.isFinite(ms)) return null
+  return new Date(Math.round(ms / 60_000) * 60_000).toISOString()
+}
+
+/// Folds a reading into the tracked window: the same window keeps its highest
+/// reading, a new one starts over. Other readings change nothing, so the ended
+/// window is still known when its reset comes.
+export function trackWindow(current: TrackedWindow | null, reading: FiveHourReading): TrackedWindow | null {
+  if (reading.state !== 'running' || !reading.resetsAt) return current
+  const key = windowKey(reading.resetsAt)
+  if (!key) return current
+  if (current && current.resetsAt === key) {
+    return reading.percent > current.maxPercent ? { resetsAt: key, maxPercent: reading.percent } : current
+  }
+  return { resetsAt: key, maxPercent: reading.percent }
+}
+
+/// Warms that started a window on the schedule or automatically, on the local
+/// day of `now`. Manual warms do not count toward the cap.
+export function automaticStartsOn(history: WarmResult[], now: Date, timeZone: string): number {
+  const today = localParts(now, timeZone).ymd
+  return history.filter(r =>
+    r.trigger !== 'manual'
+    && r.outcome === 'started'
+    && localParts(new Date(r.at), timeZone).ymd === today,
+  ).length
+}
+
+/// The auto-warm due at `now`, if any: the tracked window has reset at least a
+/// minute ago (and at most ten), the reset fell inside the active hours, the
+/// window was really used, the reset has not fired yet, and the daily cap is
+/// not reached. The idle check happens in the warm itself.
+export function dueAutoWarm(state: WarmState, now: Date): { key: string; resetsAt: string } | null {
+  const { schedule, currentWindow: window } = state
+  if (!schedule?.auto.enabled || !window) return null
+  const resetMs = Date.parse(window.resetsAt)
+  const since = now.getTime() - resetMs
+  if (!Number.isFinite(resetMs) || since < AUTO_DELAY_MS || since > AUTO_LATE_MS) return null
+  const key = `auto:${window.resetsAt}`
+  if (state.firedSlots.includes(key)) return null
+  if (!inActiveHours(schedule, new Date(resetMs))) return null
+  if (window.maxPercent <= AUTO_MIN_PERCENT) return null
+  if (automaticStartsOn(state.history, now, schedule.timeZone) >= AUTO_DAILY_CAP) return null
+  return { key, resetsAt: window.resetsAt }
+}
+
+export function inActiveHours(schedule: WarmSchedule, at: Date): boolean {
+  const from = minutesOf(schedule.auto.from) ?? 0
+  const to = boundaryMinutesOf(schedule.auto.to) ?? 24 * 60
+  const m = localParts(at, schedule.timeZone).minutes
+  return m >= from && m < to
+}
+
 // ---------------------------------------------------------------- state
 
 export function warmStatePath(): string {
@@ -200,10 +320,19 @@ export async function loadWarmState(path: string = warmStatePath()): Promise<War
       schedule: parseSchedule(raw.schedule),
       history: Array.isArray(raw.history) ? raw.history.slice(0, HISTORY_LIMIT) : [],
       firedSlots: Array.isArray(raw.firedSlots) ? raw.firedSlots.filter((s): s is string => typeof s === 'string') : [],
+      currentWindow: parseTrackedWindow(raw.currentWindow),
     }
   } catch {
-    return { schedule: null, history: [], firedSlots: [] }
+    return { schedule: null, history: [], firedSlots: [], currentWindow: null }
   }
+}
+
+function parseTrackedWindow(input: unknown): TrackedWindow | null {
+  if (!input || typeof input !== 'object') return null
+  const raw = input as Record<string, unknown>
+  if (typeof raw.resetsAt !== 'string' || typeof raw.maxPercent !== 'number') return null
+  const key = windowKey(raw.resetsAt)
+  return key ? { resetsAt: key, maxPercent: raw.maxPercent } : null
 }
 
 export async function saveWarmState(state: WarmState, path: string = warmStatePath()): Promise<void> {
@@ -314,7 +443,19 @@ export async function readFiveHour(): Promise<FiveHourReading> {
   // Same rule as the Plan view: between windows the endpoint reports 0% and
   // no reset time.
   if (five.resetsAt === null && five.percent <= 0) return { state: 'idle' }
-  return { state: 'running', resetsAt: five.resetsAt }
+  // A reset time already past is a window that has ended; the endpoint can
+  // lag a moment behind it.
+  if (five.resetsAt !== null && Date.parse(five.resetsAt) <= Date.now()) return { state: 'idle' }
+  return { state: 'running', resetsAt: five.resetsAt, percent: five.percent }
+}
+
+/// readFiveHour, with a running window folded into the tracked window.
+export async function readAndTrack(statePath?: string, read: () => Promise<FiveHourReading> = readFiveHour): Promise<FiveHourReading> {
+  const reading = await read()
+  if (reading.state === 'running' && reading.resetsAt) {
+    await updateWarmState(state => ({ ...state, currentWindow: trackWindow(state.currentWindow, reading) }), statePath).catch(() => {})
+  }
+  return reading
 }
 
 // ---------------------------------------------------------------- warm
@@ -409,7 +550,8 @@ export function isWarming(): boolean {
 export function runWarm(opts: WarmOptions, deps: Partial<WarmDeps> = {}, statePath?: string): Promise<WarmResult> {
   if (inFlight) return inFlight
   const run = (async () => {
-    const res = await performWarm(opts, deps)
+    // Every reading a warm takes also keeps the tracked window current.
+    const res = await performWarm(opts, { readFiveHour: () => readAndTrack(statePath), ...deps })
     await updateWarmState(state => ({ ...state, history: [res, ...state.history].slice(0, HISTORY_LIMIT) }), statePath).catch(() => {})
     return res
   })()
@@ -430,25 +572,46 @@ export function windowStartOf(resetsAt: string): string {
 export type WarmScheduler = { stop: () => void; tick: () => Promise<void> }
 
 /// Checks the stored schedule every `intervalMs` and fires each due slot once.
-/// A slot is marked fired before the warm runs, so a crash mid-warm never
-/// sends twice.
+/// With auto-warm on it also reads usage every 15 minutes, to learn when the
+/// current window resets, and warms right after that reset. A slot or reset is
+/// marked fired before the warm runs, so a crash mid-warm never sends twice.
 export function startWarmScheduler(opts: {
   statePath?: string
   now?: () => Date
   intervalMs?: number
-  warm?: (slot: string) => Promise<unknown>
+  pollMs?: number
+  warm?: (slot: string, trigger: 'scheduled' | 'auto') => Promise<unknown>
+  read?: () => Promise<FiveHourReading>
 } = {}): WarmScheduler {
   const now = opts.now ?? (() => new Date())
-  const warm = opts.warm ?? ((slot: string) => runWarm({ trigger: 'scheduled', slot }, {}, opts.statePath))
+  const warm = opts.warm ?? ((slot: string, trigger: 'scheduled' | 'auto') => runWarm({ trigger, slot }, {}, opts.statePath))
+  const read = opts.read ?? readFiveHour
+  const pollMs = opts.pollMs ?? AUTO_POLL_MS
+  let lastPoll = -Infinity
   let current: Promise<void> | null = null
+  const markFired = (key: string): Promise<WarmState> =>
+    updateWarmState(s => ({ ...s, firedSlots: [key, ...s.firedSlots.filter(x => x !== key)].slice(0, FIRED_SLOTS_LIMIT) }), opts.statePath)
   const check = async (): Promise<void> => {
     try {
-      const state = await loadWarmState(opts.statePath)
+      let state = await loadWarmState(opts.statePath)
       if (!state.schedule) return
-      const due = dueSlot(state.schedule, now())
-      if (!due || state.firedSlots.includes(due.slot)) return
-      await updateWarmState(s => ({ ...s, firedSlots: [due.slot, ...s.firedSlots.filter(x => x !== due.slot)].slice(0, FIRED_SLOTS_LIMIT) }), opts.statePath)
-      await warm(due.slot)
+      const at = now()
+      const due = dueSlot(state.schedule, at)
+      if (due && !state.firedSlots.includes(due.slot)) {
+        await markFired(due.slot)
+        await warm(due.slot, 'scheduled')
+        return
+      }
+      if (!state.schedule.auto.enabled) return
+      if (at.getTime() - lastPoll >= pollMs && !isWarming()) {
+        lastPoll = at.getTime()
+        await readAndTrack(opts.statePath, read).catch(() => {})
+        state = await loadWarmState(opts.statePath)
+      }
+      const auto = dueAutoWarm(state, at)
+      if (!auto) return
+      await markFired(auto.key)
+      await warm(auto.key, 'auto')
     } catch {
       // A bad state file or a failed warm must never stop the scheduler.
     }
@@ -481,6 +644,8 @@ export type WarmStatus = {
   timeZone: string
   schedule: WarmSchedule | null
   history: WarmResult[]
+  /// The window auto-warm is watching, with its highest reading.
+  currentWindow: TrackedWindow | null
 }
 
 export async function buildWarmStatus(opts: { allowed: boolean; statePath?: string; env?: NodeJS.ProcessEnv; home?: string }): Promise<WarmStatus> {
@@ -501,6 +666,7 @@ export async function buildWarmStatus(opts: { allowed: boolean; statePath?: stri
     timeZone: Intl.DateTimeFormat().resolvedOptions().timeZone,
     schedule: state.schedule,
     history: state.history,
+    currentWindow: state.currentWindow,
   }
 }
 
