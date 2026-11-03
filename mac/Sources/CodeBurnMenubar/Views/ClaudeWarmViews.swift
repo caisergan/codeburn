@@ -82,6 +82,19 @@ struct ClaudeNextWarmLabel: View {
     }
 }
 
+/// "· Auto-warm at 15:00" after the reset text, while the runner will warm
+/// right after the running window resets.
+struct ClaudeAutoWarmLabel: View {
+    let at: Date
+
+    var body: some View {
+        Text(L("· Auto-warm at %@", WindowWarmer.clockLabel(at)))
+            .font(.system(size: 10.5))
+            .foregroundStyle(.secondary)
+            .help(L("The runner sends one warm right after this window resets, so the next window starts then."))
+    }
+}
+
 /// The result of a click, for ten seconds under the header row.
 struct ClaudeWarmBannerRow: View {
     var warmer: WindowWarmer = .shared
@@ -96,14 +109,6 @@ struct ClaudeWarmBannerRow: View {
                     .font(.system(size: 10.5))
                     .fixedSize(horizontal: false, vertical: true)
                 Spacer(minLength: 4)
-                if banner.offerLocal {
-                    Button(L("Warm on this Mac")) {
-                        Task { await warmer.warmNow(onThisMac: true) }
-                    }
-                    .buttonStyle(.plain)
-                    .font(.system(size: 10.5, weight: .semibold))
-                    .foregroundStyle(Theme.brandAccent)
-                }
             }
             .foregroundStyle(success ? Color.green : Color.red.opacity(0.9))
             .padding(.horizontal, 8)
@@ -127,6 +132,12 @@ struct ClaudeWarmSettingsSection: View {
 
     var body: some View {
         Section {
+            runnerRow
+            runnerStatus
+            if showHistory {
+                historyRows
+            }
+
             Toggle(isOn: Binding(get: { prefs.enabled }, set: { value in warmer.update { $0.enabled = value } })) {
                 VStack(alignment: .leading, spacing: 1) {
                     Text(L("Warm on schedule"))
@@ -135,12 +146,7 @@ struct ClaudeWarmSettingsSection: View {
                         .foregroundStyle(.secondary)
                 }
             }
-
-            runnerPicker
-            runnerStatus
-            if showHistory {
-                historyRows
-            }
+            autoToggle
 
             LabeledContent(L("Start a window at")) {
                 Text(L("%1$lld of %2$lld", prefs.times.count, WarmSchedulePrefs.maxTimes))
@@ -166,7 +172,7 @@ struct ClaudeWarmSettingsSection: View {
         } header: {
             Text(L("Window Warmer"))
         } footer: {
-            Text(L("Sends one short Claude Code message at each time, only when no 5-hour window is running. It uses your own Claude Code login on the device that runs it; CodeBurn never sends messages with your Claude token. Off by default."))
+            Text(L("Sends one short Claude Code message at each time, or right after a reset, only when no 5-hour window is running. It uses your own Claude Code login on the device that runs it; CodeBurn never sends messages with your Claude token. Off by default."))
                 .font(.system(size: 11))
                 .foregroundStyle(.secondary)
         }
@@ -179,21 +185,52 @@ struct ClaudeWarmSettingsSection: View {
             : L("Add time (4 at most: a day holds 4.8 windows)")
     }
 
+    /// The device that runs every warm. A choice only with more than one.
     @ViewBuilder
-    private var runnerPicker: some View {
+    private var runnerRow: some View {
         let runners = warmer.runners
-        Picker(L("Run on"), selection: Binding(
-            get: { warmer.selectedRunner?.id ?? "" },
-            set: { id in warmer.update { $0.runnerId = id } }
-        )) {
-            if runners.isEmpty {
-                Text(L("No device can warm yet")).tag("")
+        if runners.count > 1 {
+            Picker(L("Run on"), selection: Binding(
+                get: { warmer.selectedRunner?.id ?? "" },
+                set: { id in warmer.update { $0.runnerId = id } }
+            )) {
+                ForEach(runners) { runner in
+                    Text(runnerLabel(runner)).tag(runner.id)
+                }
             }
-            ForEach(runners) { runner in
-                Text(runnerLabel(runner)).tag(runner.id)
+            .pickerStyle(.menu)
+        } else if let runner = runners.first {
+            LabeledContent(L("Run on")) {
+                Text(runnerLabel(runner))
             }
         }
-        .pickerStyle(.menu)
+    }
+
+    @ViewBuilder
+    private var autoToggle: some View {
+        let runner = warmer.selectedRunner
+        let available = runner?.supportsAuto == true
+        Toggle(isOn: Binding(get: { prefs.autoEnabled }, set: { value in warmer.update { $0.autoEnabled = value } })) {
+            VStack(alignment: .leading, spacing: 1) {
+                Text(L("Warm again right after each reset"))
+                Text(autoDetail(runner: runner, available: available))
+                    .font(.system(size: 11))
+                    .foregroundStyle(available ? AnyShapeStyle(.secondary) : AnyShapeStyle(Color.orange))
+                    .fixedSize(horizontal: false, vertical: true)
+            }
+        }
+        .disabled(!available && !prefs.autoEnabled)
+    }
+
+    private func autoDetail(runner: WarmRunner?, available: Bool) -> String {
+        if available || runner == nil {
+            return L("Between %1$@ and %2$@, only after a window you used, at most %3$lld a day.",
+                     WarmSchedulePrefs.clock(WarmSchedulePrefs.autoHours.lowerBound), "24:00", WarmSchedulePrefs.autoDailyCap)
+        }
+        if let runner, runner.isLocal {
+            return L("Needs a paired device that runs `codeburn share --always --allow-warm`, so it works while this Mac is off.")
+        }
+        return L("Update CodeBurn on %@ to use auto-warm", runner?.name ?? "")
     }
 
     private func runnerLabel(_ runner: WarmRunner) -> String {
@@ -244,7 +281,7 @@ struct ClaudeWarmSettingsSection: View {
             }
             if runner.status?.signedIn == true { parts.append(L("Claude Code signed in")) }
             if let last = runner.status?.history.first {
-                parts.append(L("last warm %1$@: %2$@", Self.when(last.at), Self.outcomeLabel(last)))
+                parts.append(L("last warm %1$@ %2$@: %3$@", Self.when(last.at), Self.triggerLabel(last), Self.outcomeLabel(last)))
             }
             return (.green, parts.joined(separator: " · "))
         case "not_allowed":
@@ -263,6 +300,9 @@ struct ClaudeWarmSettingsSection: View {
                     Text(Self.when(result.at))
                         .foregroundStyle(.secondary)
                         .frame(width: 120, alignment: .leading)
+                    Text(Self.triggerLabel(result))
+                        .foregroundStyle(.tertiary)
+                        .frame(width: 64, alignment: .leading)
                     Text(Self.outcomeLabel(result))
                         .font(.system(size: 10.5, weight: .semibold))
                         .padding(.horizontal, 5)
@@ -282,6 +322,14 @@ struct ClaudeWarmSettingsSection: View {
         if Calendar.current.isDateInToday(date) { return L("Today %@", WindowWarmer.clockLabel(date)) }
         if Calendar.current.isDateInYesterday(date) { return L("Yesterday %@", WindowWarmer.clockLabel(date)) }
         return date.formatted(.dateTime.weekday(.abbreviated).hour().minute())
+    }
+
+    static func triggerLabel(_ result: WarmResultDTO) -> String {
+        switch result.trigger {
+        case "auto": return L("auto")
+        case "scheduled": return L("scheduled")
+        default: return L("manual")
+        }
     }
 
     static func outcomeLabel(_ result: WarmResultDTO) -> String {

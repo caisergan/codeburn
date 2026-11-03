@@ -2114,6 +2114,9 @@ private struct PlanInsight: View {
                     Text(L("Resets %@", resets))
                         .font(.system(size: 10.5))
                         .foregroundStyle(.secondary)
+                    if let auto = WindowWarmer.shared.autoWarmAt(resetsAt: usage.fiveHourResetsAt, percent: usage.fiveHourPercent) {
+                        ClaudeAutoWarmLabel(at: auto)
+                    }
                 }
             }
             ClaudeWarmBannerRow()
