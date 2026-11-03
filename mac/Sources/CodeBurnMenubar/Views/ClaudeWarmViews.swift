@@ -360,7 +360,10 @@ struct ClaudeWarmSettingsSection: View {
             if let resets = result.resetsAt { return L("window running, resets %@", WindowWarmer.clockLabel(resets)) }
             return L("window running")
         case "weekly_full": return L("weekly limit reached")
-        case "usage_unavailable": return L("couldn't read Claude usage")
+        case "usage_unavailable":
+            if let detail = result.detail { return L("couldn't read Claude usage: %@", detail) }
+            return L("couldn't read Claude usage")
+        case "signed_out": return L("Claude Code is signed out there")
         case "claude_not_found": return L("Claude Code isn't installed there")
         case "no_window_yet": return L("sent; the window wasn't showing yet")
         default: return result.detail ?? L("Claude Code didn't answer")

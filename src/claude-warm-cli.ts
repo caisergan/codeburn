@@ -3,7 +3,8 @@
 
 import { hostname } from 'os'
 
-import { buildWarmStatus, runWarm, setWarmSchedule, type WarmResult, type WarmStatus } from './claude-warm.js'
+import { buildWarmStatus, runWarm, setWarmSchedule, warmStatePath, type WarmResult, type WarmStatus } from './claude-warm.js'
+import { readWarmLog, warmLogPathFor } from './claude-warm-log.js'
 import { findRemote, listWarmDevices, pushWarmSchedule, warmOnDevice, warmStatusOf } from './sharing/claude-warm-peers.js'
 
 export type WarmCommandOptions = {
@@ -12,6 +13,7 @@ export type WarmCommandOptions = {
   set?: string
   force?: boolean
   scheduled?: boolean
+  lines?: string
   format: 'text' | 'json'
 }
 
@@ -35,7 +37,9 @@ export function describeResult(result: WarmResult): string {
     case 'weekly_full':
       return 'Skipped: the weekly limit is used up, so a new window could not be used.'
     case 'usage_unavailable':
-      return 'Skipped: could not read Claude usage, so it is unknown whether a window is running.'
+      return `Skipped: could not read Claude usage${result.detail ? ` (${result.detail})` : ''}, so it is unknown whether a window is running.`
+    case 'signed_out':
+      return `Skipped: ${result.detail ?? 'Claude Code is not signed in on this machine (run `claude` there and sign in with /login)'}.`
     case 'claude_not_found':
       return 'Failed: the `claude` CLI was not found on this machine.'
     case 'send_failed':
@@ -46,9 +50,10 @@ export function describeResult(result: WarmResult): string {
 }
 
 function describeStatus(status: WarmStatus | null): string {
+  const signedOut = status?.signedIn === false ? ' · Claude Code signed out (run `claude` there and sign in with /login)' : ''
   const schedule = status?.schedule
-  if (!schedule) return ''
-  let text = ` · schedule ${schedule.enabled ? 'on' : 'off'} ${schedule.times.join(', ')}`
+  if (!schedule) return signedOut
+  let text = `${signedOut} · schedule ${schedule.enabled ? 'on' : 'off'} ${schedule.times.join(', ')}`
   // A version-1 device has no auto-warm; its schedule comes back without it.
   if (schedule.auto) {
     text += ` · auto-warm ${schedule.auto.enabled ? `on ${schedule.auto.from}–${schedule.auto.to}` : 'off'}`
@@ -102,7 +107,17 @@ export async function runWarmCommand(action: string | undefined, opts: WarmComma
     return
   }
 
-  if (action !== undefined) fail('unknown action. Valid values: status, schedule (or none to warm now).')
+  if (action === 'log') {
+    if (remote) fail('the log stays on the machine that warms. Run `codeburn warm log` on that device.')
+    const count = opts.lines === undefined ? 50 : Number(opts.lines)
+    if (!Number.isInteger(count) || count < 1) fail('--lines needs a positive whole number.')
+    const path = warmLogPathFor(warmStatePath())
+    const lines = await readWarmLog(path, count)
+    out(opts.format, { path, lines }, lines.length > 0 ? lines.join('\n') : `No warm log yet (${path}).`)
+    return
+  }
+
+  if (action !== undefined) fail('unknown action. Valid values: status, schedule, log (or none to warm now).')
 
   // A warm can take over a minute; keep the app's no-output watchdog fed.
   const { startProgressKeepalive, stopProgressKeepalive } = await import('./parser.js')

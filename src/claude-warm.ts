@@ -10,8 +10,9 @@ import { homedir, tmpdir } from 'os'
 import { delimiter, dirname, join } from 'path'
 
 import { writeFileAtomic } from './claude-limit-sources.js'
+import { createWarmLogger, warmLogPathFor, type WarmLogger, type WarmLogLevel } from './claude-warm-log.js'
 import { getConfigFilePath } from './config.js'
-import { fetchClaudeQuota } from './quota/claude.js'
+import { fetchClaudeQuota, type ClaudeResult } from './quota/claude.js'
 
 /// 2: auto-warm after reset (`schedule.auto`, `currentWindow`).
 export const WARM_STATUS_VERSION = 2
@@ -94,6 +95,9 @@ export type WarmReason =
   | 'window_running'
   | 'weekly_full'
   | 'usage_unavailable'
+  /// Claude Code on the runner has no usable login (never signed in, signed
+  /// out, or its login expired and could not be renewed).
+  | 'signed_out'
   | 'claude_not_found'
   | 'send_failed'
   | 'no_window_yet'
@@ -132,7 +136,19 @@ export type FiveHourReading =
   | { state: 'idle' }
   | { state: 'running'; resetsAt: string | null; percent: number }
   | { state: 'weekly_full'; resetsAt: string | null }
-  | { state: 'unknown' }
+  | { state: 'unknown'; problem?: UsageProblem; detail?: string | null }
+
+/// Why usage could not be read. `signed_out` and `login_expired` need the user
+/// to sign in to Claude Code on that machine again; the rest are the endpoint's.
+export type UsageProblem =
+  | 'signed_out'
+  | 'login_expired'
+  | 'access_denied'
+  | 'rate_limited'
+  | 'rejected'
+  | 'unreachable'
+  | 'no_five_hour'
+  | 'error'
 
 export type SendResult = { ok: true } | { ok: false; reason: 'claude_not_found' | 'send_failed'; detail: string | null; network: boolean }
 
@@ -434,18 +450,50 @@ export async function sendWarmMessage(opts: { binary?: string | null; timeoutMs?
 /// The 5-hour window's state from Anthropic's usage endpoint (read-only, the
 /// same reading as `codeburn quota` and the Plan view).
 export async function readFiveHour(): Promise<FiveHourReading> {
-  const { quota } = await fetchClaudeQuota({ allowKeychain: process.platform === 'darwin' })
-  if (quota.connection !== 'connected') return { state: 'unknown' }
+  return readingOf(await fetchClaudeQuota({ allowKeychain: process.platform === 'darwin' }))
+}
+
+const SIGN_IN_HINT = 'run `claude` there and sign in with /login'
+
+/// What a failed usage read means, in words that name the fix.
+export function usageProblemOf(res: ClaudeResult): { problem: UsageProblem; detail: string } | null {
+  const { quota } = res
+  switch (quota.connection) {
+    case 'connected':
+      return null
+    case 'disconnected':
+      return { problem: 'signed_out', detail: `Claude Code is not signed in on this machine (${SIGN_IN_HINT})` }
+    case 'accessDenied':
+      return { problem: 'access_denied', detail: "the macOS Keychain refused access to Claude Code's login" }
+    case 'terminalFailure':
+      if (quota.footerLines.length > 0) {
+        return { problem: 'login_expired', detail: `Claude Code's login expired and was not renewed (${SIGN_IN_HINT})` }
+      }
+      return { problem: 'rejected', detail: `the usage endpoint refused the request (HTTP ${res.httpStatus ?? '4xx'})` }
+    default:
+      if (res.retryAfterSeconds !== undefined) {
+        return { problem: 'rate_limited', detail: `the usage endpoint is rate-limiting this machine (retry in ${res.retryAfterSeconds}s)` }
+      }
+      if (res.httpStatus === 401) return { problem: 'rejected', detail: 'the usage endpoint did not accept the login (HTTP 401)' }
+      if (res.httpStatus !== undefined) return { problem: 'unreachable', detail: `the usage endpoint answered HTTP ${res.httpStatus}` }
+      return { problem: 'unreachable', detail: `could not reach the usage endpoint${res.error ? `: ${res.error}` : ''}` }
+  }
+}
+
+export function readingOf(res: ClaudeResult, now: number = Date.now()): FiveHourReading {
+  const problem = usageProblemOf(res)
+  if (problem) return { state: 'unknown', ...problem }
+  const { quota } = res
   const five = quota.details.find(w => w.label === '5-hour')
   const weekly = quota.details.find(w => w.label === 'Weekly')
-  if (!five) return { state: 'unknown' }
+  if (!five) return { state: 'unknown', problem: 'no_five_hour', detail: 'the usage endpoint returned no 5-hour window' }
   if (weekly && weekly.percent >= 1) return { state: 'weekly_full', resetsAt: weekly.resetsAt }
   // Same rule as the Plan view: between windows the endpoint reports 0% and
   // no reset time.
   if (five.resetsAt === null && five.percent <= 0) return { state: 'idle' }
   // A reset time already past is a window that has ended; the endpoint can
   // lag a moment behind it.
-  if (five.resetsAt !== null && Date.parse(five.resetsAt) <= Date.now()) return { state: 'idle' }
+  if (five.resetsAt !== null && Date.parse(five.resetsAt) <= now) return { state: 'idle' }
   return { state: 'running', resetsAt: five.resetsAt, percent: five.percent }
 }
 
@@ -495,7 +543,11 @@ export async function performWarm(opts: WarmOptions, deps: Partial<WarmDeps> = {
     slot: opts.slot ?? null,
     ...extra,
   })
-  const read = (): Promise<FiveHourReading> => d.readFiveHour().catch((): FiveHourReading => ({ state: 'unknown' }))
+  const read = (): Promise<FiveHourReading> => d.readFiveHour().catch((e: unknown): FiveHourReading => ({
+    state: 'unknown',
+    problem: 'error',
+    detail: e instanceof Error ? e.message : String(e),
+  }))
   const skipUnlessIdle = async (): Promise<WarmResult | null> => {
     if (opts.force) return null
     let reading = await read()
@@ -510,7 +562,9 @@ export async function performWarm(opts: WarmOptions, deps: Partial<WarmDeps> = {
     if (reading.state === 'weekly_full') return result('skipped', 'weekly_full', { resetsAt: reading.resetsAt })
     // Never warm blind: without a reading there is no telling whether a
     // window is already running.
-    return result('skipped', 'usage_unavailable')
+    const detail = reading.detail ?? null
+    if (reading.problem === 'signed_out' || reading.problem === 'login_expired') return result('skipped', 'signed_out', { detail })
+    return result('skipped', 'usage_unavailable', { detail })
   }
 
   const skipped = await skipUnlessIdle()
@@ -547,11 +601,18 @@ export function isWarming(): boolean {
 /// performWarm, one at a time per process, with the result appended to the
 /// history. A request that arrives while a warm runs gets that warm's result
 /// rather than sending a second message.
-export function runWarm(opts: WarmOptions, deps: Partial<WarmDeps> = {}, statePath?: string): Promise<WarmResult> {
+export function runWarm(opts: WarmOptions, deps: Partial<WarmDeps> = {}, statePath?: string, log: WarmLogger = warmLoggerFor(statePath)): Promise<WarmResult> {
   if (inFlight) return inFlight
   const run = (async () => {
+    await log('info', 'warm.begin', { trigger: opts.trigger, slot: opts.slot ?? undefined, force: opts.force || undefined })
     // Every reading a warm takes also keeps the tracked window current.
     const res = await performWarm(opts, { readFiveHour: () => readAndTrack(statePath), ...deps })
+    await log(levelOf(res), `warm.${res.outcome}`, {
+      trigger: res.trigger,
+      reason: res.reason ?? undefined,
+      resetsAt: res.resetsAt ?? undefined,
+      detail: res.detail ?? undefined,
+    })
     await updateWarmState(state => ({ ...state, history: [res, ...state.history].slice(0, HISTORY_LIMIT) }), statePath).catch(() => {})
     return res
   })()
@@ -560,6 +621,17 @@ export function runWarm(opts: WarmOptions, deps: Partial<WarmDeps> = {}, statePa
     inFlight = null
   })
   return run
+}
+
+export function warmLoggerFor(statePath: string = warmStatePath()): WarmLogger {
+  return createWarmLogger(warmLogPathFor(statePath))
+}
+
+/// A skip the user has to act on is a warning; a send that failed, an error.
+function levelOf(res: WarmResult): WarmLogLevel {
+  if (res.outcome === 'failed') return 'error'
+  if (res.reason === 'signed_out' || res.reason === 'usage_unavailable' || res.reason === 'no_window_yet') return 'warn'
+  return 'info'
 }
 
 /// The window a warm at `resetsAt` started, for display.
@@ -582,12 +654,27 @@ export function startWarmScheduler(opts: {
   pollMs?: number
   warm?: (slot: string, trigger: 'scheduled' | 'auto') => Promise<unknown>
   read?: () => Promise<FiveHourReading>
+  log?: WarmLogger
 } = {}): WarmScheduler {
   const now = opts.now ?? (() => new Date())
-  const warm = opts.warm ?? ((slot: string, trigger: 'scheduled' | 'auto') => runWarm({ trigger, slot }, {}, opts.statePath))
+  const log = opts.log ?? warmLoggerFor(opts.statePath)
+  const warm = opts.warm ?? ((slot: string, trigger: 'scheduled' | 'auto') => runWarm({ trigger, slot }, {}, opts.statePath, log))
   const read = opts.read ?? readFiveHour
   const pollMs = opts.pollMs ?? AUTO_POLL_MS
   let lastPoll = -Infinity
+  // Auto-warm polls every 15 minutes; a problem is logged when it starts,
+  // changes or clears, not on every poll.
+  let pollProblem: string | null = null
+  const notePoll = async (reading: FiveHourReading): Promise<void> => {
+    const problem = reading.state === 'unknown' ? (reading.problem ?? 'error') : null
+    if (problem === pollProblem) return
+    if (problem && reading.state === 'unknown') {
+      await log('warn', 'usage.unreadable', { problem, detail: reading.detail ?? undefined, note: 'auto-warm cannot see resets until this clears' })
+    } else {
+      await log('info', 'usage.readable', { state: reading.state })
+    }
+    pollProblem = problem
+  }
   let current: Promise<void> | null = null
   const markFired = (key: string): Promise<WarmState> =>
     updateWarmState(s => ({ ...s, firedSlots: [key, ...s.firedSlots.filter(x => x !== key)].slice(0, FIRED_SLOTS_LIMIT) }), opts.statePath)
@@ -599,21 +686,29 @@ export function startWarmScheduler(opts: {
       const due = dueSlot(state.schedule, at)
       if (due && !state.firedSlots.includes(due.slot)) {
         await markFired(due.slot)
+        await log('info', 'schedule.due', { slot: due.slot })
         await warm(due.slot, 'scheduled')
         return
       }
       if (!state.schedule.auto.enabled) return
       if (at.getTime() - lastPoll >= pollMs && !isWarming()) {
         lastPoll = at.getTime()
-        await readAndTrack(opts.statePath, read).catch(() => {})
+        const reading = await readAndTrack(opts.statePath, read).catch((e: unknown): FiveHourReading => ({
+          state: 'unknown',
+          problem: 'error',
+          detail: e instanceof Error ? e.message : String(e),
+        }))
+        await notePoll(reading)
         state = await loadWarmState(opts.statePath)
       }
       const auto = dueAutoWarm(state, at)
       if (!auto) return
       await markFired(auto.key)
+      await log('info', 'auto.due', { reset: auto.resetsAt })
       await warm(auto.key, 'auto')
-    } catch {
+    } catch (e) {
       // A bad state file or a failed warm must never stop the scheduler.
+      await log('error', 'scheduler.error', { detail: e instanceof Error ? e.message : String(e) })
     }
   }
   // A tick while one runs (a long warm) joins it rather than starting another.
@@ -648,6 +743,20 @@ export type WarmStatus = {
   currentWindow: TrackedWindow | null
 }
 
+/// Whether Claude Code's credentials file holds a login. Signing out (or a
+/// failed renewal) leaves the file in place with empty tokens, so the file
+/// existing is not enough.
+export async function hasStoredLogin(path: string): Promise<boolean> {
+  try {
+    const raw = JSON.parse(await readFile(path, 'utf8')) as { claudeAiOauth?: Record<string, unknown> }
+    const oauth = raw.claudeAiOauth
+    const filled = (v: unknown): boolean => typeof v === 'string' && v.length > 0
+    return !!oauth && (filled(oauth.accessToken) || filled(oauth.refreshToken))
+  } catch {
+    return false
+  }
+}
+
 export async function buildWarmStatus(opts: { allowed: boolean; statePath?: string; env?: NodeJS.ProcessEnv; home?: string }): Promise<WarmStatus> {
   const env = opts.env ?? process.env
   const home = opts.home ?? homedir()
@@ -655,7 +764,7 @@ export async function buildWarmStatus(opts: { allowed: boolean; statePath?: stri
   let signedIn: boolean | null = null
   if (process.platform !== 'darwin') {
     const configDir = env.CLAUDE_CONFIG_DIR || join(home, '.claude')
-    signedIn = await access(join(configDir, '.credentials.json'), constants.R_OK).then(() => true, () => false)
+    signedIn = await hasStoredLogin(join(configDir, '.credentials.json'))
   }
   return {
     version: WARM_STATUS_VERSION,

@@ -290,6 +290,15 @@ Window Warmer
   and marks it fired before sending, so a restart never sends twice.
 - **VM setup (2026-10-31)**: the share runs in the tmux session `codeburn`,
   inside a shell, as `~/.npm-global/bin/codeburn share --always --allow-warm`.
+- **Why a warm did nothing (2026-11-03)**: the VM's Claude Code was signed
+  out (credentials file kept, tokens emptied), and every warm was skipped as
+  "couldn't read Claude usage" while the status still said signed in.
+  Signed in now means the file holds a token; a skip for a missing or
+  expired login has the reason `signed_out`; any other failed usage read
+  keeps its cause (HTTP status, rate limit, network error) in `detail`.
+  The runner logs each warm and scheduler decision to `claude-warm.log`
+  beside `claude-warm.json` (rotated at 512 KB); auto-warm poll problems are
+  logged when they start and clear. `codeburn warm log` prints it.
 
 ## V2: Auto-warm after reset
 
