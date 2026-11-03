@@ -139,7 +139,9 @@ struct WindowWarmerTests {
     @Test("Every warm runs on the paired device; this Mac only without one")
     @MainActor
     func runnerSelection() {
-        let warmer = WindowWarmer(defaults: UserDefaults(suiteName: "warm-test-\(UUID())")!)
+        let (defaults, suiteName) = TestDefaults.make("CodeBurnMenubarTests.WindowWarmer.\(#function)")
+        defer { TestDefaults.forget(suiteName) }
+        let warmer = WindowWarmer(defaults: defaults)
         let vm = WarmDeviceDTO(id: "vm", name: "vm", state: "ok", status: status(version: 2))
         warmer.seedForPreview(prefs: WarmSchedulePrefs(runnerId: WarmRunner.localId), report: report(devices: [vm]))
         #expect(warmer.runners.map(\.id) == ["vm"])
