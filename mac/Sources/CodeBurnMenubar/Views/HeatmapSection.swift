@@ -2840,9 +2840,9 @@ private struct CopilotPlanInsight: View {
 }
 
 /// Plan tab for Antigravity. Quota comes from the Antigravity app's local
-/// language server (127.0.0.1 only, self-signed TLS) — there are no
-/// credentials to read, so the no-data state means "start the Antigravity
-/// app, then reconnect".
+/// language server (127.0.0.1 only, self-signed TLS) while it runs, and from
+/// Google with the keychain sign-in while it is closed, so the no-data state
+/// means "sign in to Antigravity once".
 private struct AntigravityPlanInsight: View {
     @Environment(AppStore.self) private var store
 
@@ -2851,30 +2851,30 @@ private struct AntigravityPlanInsight: View {
             switch AntigravityQuotaPresentation.planContent(loadState: store.antigravityLoadState, hasUsage: store.antigravityUsage != nil) {
             case .noCredentials:
                 PlanNoCredentialsView(
-                    title: L("No local Antigravity server found"),
-                    message: L("Start the Antigravity app, then click Try Again.")
+                    title: L("No Antigravity sign-in found"),
+                    message: L("Sign in to the Antigravity app or agy once, then click Try Again. After that, quota loads even while Antigravity is closed.")
                 ) { Task { await store.bootstrapAntigravity() } }
             case .loading:
-                PlanLoadingView(message: L("Probing the local Antigravity server..."))
+                PlanLoadingView(message: L("Loading Antigravity quota..."))
             case .failed:
                 PlanFailedView(
                     error: store.antigravityError
                 ) { Task { await store.refreshAntigravity() } }
             case .transientFailed:
                 PlanFailedView(
-                    error: store.antigravityError ?? L("Local Antigravity server unreachable. Retrying.")
+                    error: store.antigravityError ?? L("Couldn't load Antigravity quota. Retrying.")
                 ) { Task { await store.refreshAntigravity() } }
             case let .reconnect(reason):
                 PlanReconnectView(
                     title: L("Reconnect Antigravity"),
                     reason: reason,
-                    fallback: L("Start the Antigravity app, then click Reconnect.")
+                    fallback: L("Sign in to Antigravity, then click Reconnect.")
                 ) { Task { await store.bootstrapAntigravity() } }
             case let .usage(idle):
                 if let usage = store.antigravityUsage {
                     loadedBody(usage: usage, idle: idle)
                 } else {
-                    PlanLoadingView(message: L("Probing the local Antigravity server..."))
+                    PlanLoadingView(message: L("Loading Antigravity quota..."))
                 }
             }
         }
@@ -2888,12 +2888,19 @@ private struct AntigravityPlanInsight: View {
                     .font(.system(size: 13, weight: .semibold))
                     .foregroundStyle(.primary)
                 Spacer()
+                AntigravityWarmButton(usage: usage)
                 if let resetsAt = usage.primary?.resetsAt {
                     Text(L("Resets %@", relativeReset(resetsAt)))
                         .font(.system(size: 10.5))
                         .foregroundStyle(.secondary)
+                } else if let next = AntigravityWarmer.shared.nextWarm() {
+                    ClaudeNextWarmLabel(next: next)
+                }
+                if let auto = AntigravityWarmer.shared.autoWarmAt(usage: usage) {
+                    ClaudeAutoWarmLabel(at: auto)
                 }
             }
+            AntigravityWarmBannerRow()
             ForEach(Array(usage.details.enumerated()), id: \.offset) { _, window in
                 UtilizationRow(
                     label: window.label,
@@ -2903,7 +2910,7 @@ private struct AntigravityPlanInsight: View {
                 )
             }
             if idle {
-                Text(L("Server disconnected. Start the Antigravity app to refresh."))
+                Text(L("Antigravity sign-in unavailable. Sign in to Antigravity to refresh."))
                     .font(.system(size: 10))
                     .foregroundStyle(.tertiary)
             }

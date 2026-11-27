@@ -169,6 +169,7 @@ final class AppDelegate: NSObject, NSApplicationDelegate, NSPopoverDelegate, NSM
         capacityDockController?.start()
         observeStore()
         WindowWarmer.shared.start(store: store)
+        AntigravityWarmer.shared.start(store: store)
         startRefreshLoop()
         startNapBackstop()
         setupWakeObservers()

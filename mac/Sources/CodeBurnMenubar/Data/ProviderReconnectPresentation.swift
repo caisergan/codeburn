@@ -24,8 +24,8 @@ struct ProviderReconnectPresentation: Sendable, Equatable {
             defaultReason = L("Copilot credentials need to be refreshed.")
             instruction = L("Sign in with the Copilot CLI, an editor plugin, or `gh auth login`, then click Reconnect.")
         case .antigravity:
-            defaultReason = L("The local Antigravity service is unavailable.")
-            instruction = L("Start the Antigravity app, then click Reconnect.")
+            defaultReason = L("The Antigravity sign-in is unavailable.")
+            instruction = L("Sign in to Antigravity, then click Reconnect.")
         default:
             defaultReason = L("%@ credentials need to be refreshed.", provider.displayLabel)
             instruction = L("Sign in to %@ again, then retry.", provider.displayLabel)
