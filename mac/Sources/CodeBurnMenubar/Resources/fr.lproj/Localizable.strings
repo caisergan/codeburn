@@ -975,3 +975,12 @@
 "agy is signed out. Run `agy` once and sign in." = "agy est déconnecté. Lancez `agy` une fois et connectez-vous.";
 "agy lists no model in this group" = "agy ne liste aucun modèle de ce groupe";
 "no output" = "aucune sortie";
+
+/* Antigravity sessions */
+"No Antigravity sessions in the last seven days" = "Aucune session Antigravity ces sept derniers jours";
+"Antigravity was signed out" = "Antigravity était déconnecté";
+"Antigravity reported no quota groups" = "Antigravity n'a signalé aucun groupe de quota";
+"Quota group" = "Groupe de quota";
+"Session numbers" = "Chiffres de session";
+"Keep Antigravity session numbers live while Antigravity is working" = "Garder les chiffres de session Antigravity à jour pendant qu'Antigravity travaille";
+"Checks your Antigravity quota every 2 minutes while the app, agy or the IDE is working and for 10 minutes after. Nothing runs while idle." = "Vérifie votre quota Antigravity toutes les 2 minutes pendant que l'app, agy ou l'IDE travaille et 10 minutes après. Rien ne tourne au repos.";

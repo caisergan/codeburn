@@ -16,14 +16,24 @@ enum ClaudeLiveReadingPreference {
 /// Claude config directory's `projects/` tree. No polling: the stream wakes the
 /// app only when a transcript is written, and the refresh loop asks
 /// `lastWriteAt` on its own ticks.
+///
+/// Antigravity's conversations use one too (`AntigravityActivity.monitor`),
+/// with its own file suffixes and several directories.
 final class ClaudeActivityMonitor: @unchecked Sendable {
     static let shared = ClaudeActivityMonitor()
 
     private let lock = NSLock()
     private var _lastWriteAt: Date?
     private var stream: FSEventStreamRef?
-    private var watchedPath: String?
-    private let queue = DispatchQueue(label: "org.agentseal.codeburn.claude-activity", qos: .utility)
+    private var watchedPaths: [String] = []
+    private let queue: DispatchQueue
+    /// The file names that count as a write.
+    let suffixes: [String]
+
+    init(label: String = "org.agentseal.codeburn.claude-activity", suffixes: [String] = [".jsonl"]) {
+        self.queue = DispatchQueue(label: label, qos: .utility)
+        self.suffixes = suffixes
+    }
 
     var lastWriteAt: Date? {
         lock.lock()
@@ -52,11 +62,18 @@ final class ClaudeActivityMonitor: @unchecked Sendable {
 
     /// Starts (or re-targets) the stream. Idempotent for the same path.
     func start(path: String? = ClaudeActivityMonitor.defaultProjectsDirectory()) {
+        guard let path else { return }
+        start(paths: [path])
+    }
+
+    /// Watches every existing directory in `paths`. Idempotent for the same
+    /// set.
+    func start(paths: [String]) {
         lock.lock()
         defer { lock.unlock() }
-        guard let path, path != watchedPath || stream == nil else { return }
+        let existing = paths.filter { FileManager.default.fileExists(atPath: $0) }
+        guard !existing.isEmpty, existing != watchedPaths || stream == nil else { return }
         stopLocked()
-        guard FileManager.default.fileExists(atPath: path) else { return }
 
         var context = FSEventStreamContext(
             version: 0,
@@ -74,7 +91,7 @@ final class ClaudeActivityMonitor: @unchecked Sendable {
                 let isFile = flag & kFSEventStreamEventFlagItemIsFile != 0
                 let written = flag & (kFSEventStreamEventFlagItemModified | kFSEventStreamEventFlagItemCreated) != 0
                 let name = index < names.count ? names[index] : ""
-                if isFile, written, name.hasSuffix(".jsonl") {
+                if isFile, written, monitor.suffixes.contains(where: { name.hasSuffix($0) }) {
                     monitor.noteWrite()
                     return
                 }
@@ -87,7 +104,7 @@ final class ClaudeActivityMonitor: @unchecked Sendable {
             kCFAllocatorDefault,
             callback,
             &context,
-            [path] as CFArray,
+            existing as CFArray,
             FSEventStreamEventId(kFSEventStreamEventIdSinceNow),
             5.0,
             flags
@@ -99,7 +116,7 @@ final class ClaudeActivityMonitor: @unchecked Sendable {
             return
         }
         stream = created
-        watchedPath = path
+        watchedPaths = existing
     }
 
     func stop() {
@@ -114,6 +131,6 @@ final class ClaudeActivityMonitor: @unchecked Sendable {
         FSEventStreamInvalidate(stream)
         FSEventStreamRelease(stream)
         self.stream = nil
-        watchedPath = nil
+        watchedPaths = []
     }
 }

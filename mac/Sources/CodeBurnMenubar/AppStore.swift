@@ -233,6 +233,27 @@ final class AppStore {
     // app's local language server, which is prompt-free, so we start dormant
     // and auto-activate (probe) on the first refresh tick.
     var antigravityLoadState: SubscriptionLoadState = .dormant
+    /// Antigravity 5-hour sessions and weeks per quota group, from
+    /// `codeburn limits --provider antigravity`. Nil until the first answer.
+    var antigravityLimits: AntigravityLimitsReport?
+    @ObservationIgnored private var antigravityLimitsTask: Task<Void, Never>?
+    @ObservationIgnored private var antigravityLimitsFetchedAt: Date?
+    /// A CLI without `limits --provider` is asked again only after this.
+    @ObservationIgnored private var antigravityLimitsRetryAfter: Date?
+    /// Every quota read, logged for the session numbers. Injectable for tests.
+    @ObservationIgnored var antigravityUsageFetcher: @Sendable () async throws -> AntigravityUsage = {
+        do {
+            let usage = try await AntigravitySubscriptionService.refresh()
+            await AntigravityLimitReadingLog.record(usage)
+            return usage
+        } catch {
+            await AntigravityLimitReadingLog.recordFailure(error)
+            throw error
+        }
+    }
+    @ObservationIgnored var antigravityLimitsFetcher: @Sendable () async throws -> AntigravityLimitsReport = {
+        try await DataClient.fetchAntigravityLimits()
+    }
 
     /// Runtime state for providers that do not use one of the original native
     /// bespoke CodeBurn adapter. Keys are stable provider IDs from
@@ -2149,11 +2170,13 @@ final class AppStore {
         let gen = antigravityRefreshGen
         antigravityLoadState = .bootstrapping
         do {
-            let usage = try await AntigravitySubscriptionService.refresh()
+            let usage = try await antigravityUsageFetcher()
             guard gen == antigravityRefreshGen else { return }
             antigravityUsage = usage
             antigravityError = nil
             antigravityLoadState = .loaded
+            // A new reading changes the session numbers.
+            Task { [weak self] in await self?.refreshAntigravityLimits(force: true) }
         } catch let err as AntigravitySubscriptionService.FetchError {
             guard gen == antigravityRefreshGen else { return }
             applyAntigravityFetchError(err)
@@ -2180,11 +2203,12 @@ final class AppStore {
         let gen = antigravityRefreshGen
         if antigravityUsage == nil { antigravityLoadState = .loading }
         do {
-            let usage = try await AntigravitySubscriptionService.refresh()
+            let usage = try await antigravityUsageFetcher()
             guard gen == antigravityRefreshGen else { return false }
             antigravityUsage = usage
             antigravityError = nil
             antigravityLoadState = .loaded
+            Task { [weak self] in await self?.refreshAntigravityLimits(force: true) }
             return true
         } catch let err as AntigravitySubscriptionService.FetchError {
             guard gen == antigravityRefreshGen else { return false }
@@ -2198,8 +2222,45 @@ final class AppStore {
         }
     }
 
+    /// Refreshes `antigravityLimits`, at most once per `minAge` unless forced.
+    /// Single-flight, like `refreshClaudeLimits`. Skipped until Antigravity
+    /// quota has loaded once: without a sign-in there are no readings to
+    /// measure against.
+    func refreshAntigravityLimits(force: Bool = false, minAge: TimeInterval = 60) async {
+        guard antigravityUsage != nil else { return }
+        if let task = antigravityLimitsTask {
+            await task.value
+            if !force { return }
+        }
+        if !force, let fetchedAt = antigravityLimitsFetchedAt, Date().timeIntervalSince(fetchedAt) < minAge { return }
+        if let retryAfter = antigravityLimitsRetryAfter, Date() < retryAfter { return }
+        let fetcher = antigravityLimitsFetcher
+        let task = Task { [weak self] in
+            do {
+                let report = try await fetcher()
+                guard let self, self.antigravityUsage != nil else { return }
+                self.antigravityLimits = report
+                self.antigravityLimitsRetryAfter = nil
+            } catch is CancellationError {
+                return
+            } catch {
+                // Keep the last good answer; an older CLI is not re-spawned
+                // on every reading.
+                guard let self else { return }
+                if case DataClientError.nonZeroExit = error {
+                    self.antigravityLimitsRetryAfter = Date().addingTimeInterval(10 * 60)
+                }
+            }
+        }
+        antigravityLimitsTask = task
+        antigravityLimitsFetchedAt = Date()
+        await task.value
+        antigravityLimitsTask = nil
+    }
+
     func disconnectAntigravity() {
         antigravityRefreshGen &+= 1
+        antigravityLimits = nil
         antigravityUsage = nil
         antigravityError = nil
         antigravityLoadState = .notBootstrapped

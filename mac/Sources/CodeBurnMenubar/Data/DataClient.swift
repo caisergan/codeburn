@@ -108,6 +108,28 @@ struct DataClient {
     /// backoff; sent when the user retries a device.
     static let claudeLimitsRetrySubcommand = claudeLimitsSubcommand + ["--retry-failed"]
 
+    static let antigravityLimitsSubcommand = ["limits", "--format", "json", "--provider", "antigravity"]
+
+    /// Antigravity 5-hour sessions and weeks per quota group. Read-only and
+    /// network-free: it reads the reading log this app writes.
+    static func fetchAntigravityLimits(qualityOfService: QualityOfService = .utility) async throws -> AntigravityLimitsReport {
+        let result = try await runCLI(subcommand: antigravityLimitsSubcommand, qualityOfService: qualityOfService)
+        guard result.exitCode == 0 else {
+            throw DataClientError.nonZeroExit(code: result.exitCode, stderr: result.stderr)
+        }
+        do {
+            return try AntigravityLimitsReport.decode(result.stdout)
+        } catch {
+            let snippet = String(decoding: result.stdout.prefix(2048), as: UTF8.self)
+            throw DataClientError.decode(CLIDecodeFailure(
+                underlying: error,
+                stdoutByteCount: result.stdout.count,
+                stdoutSnippet: snippet,
+                stderr: result.stderr
+            ))
+        }
+    }
+
     /// Claude 5-hour sessions and weeks (`codeburn limits`). Read-only; it
     /// reads the reading log this app writes, and the network only to reach
     /// paired devices.

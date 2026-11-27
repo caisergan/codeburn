@@ -122,6 +122,10 @@ export type LimitsInput = {
   /// Paired devices on the same Claude account, and this device's name.
   peers?: PeerLimitData[]
   localName?: string
+  /// The mark window identities and inferred starts are rounded to. Claude
+  /// windows start on 10-minute marks (the default); Antigravity's start on
+  /// the first message, to the second, so it passes one minute.
+  windowStepMs?: number
 }
 
 export type Gap = { from: string; to: string; reason: string }
@@ -270,12 +274,12 @@ export type LimitsOutput = {
 
 /// A window's identity. Raw reset times jitter by up to a second
 /// (07:59:59.6 against 08:00:00.0), which would split one window in two.
-export function windowKey(resetsAt: number): number {
-  return Math.round(resetsAt / TEN_MINUTES_MS) * TEN_MINUTES_MS
+export function windowKey(resetsAt: number, step = TEN_MINUTES_MS): number {
+  return Math.round(resetsAt / step) * step
 }
 
-function floorToTenMinutes(ms: number): number {
-  return Math.floor(ms / TEN_MINUTES_MS) * TEN_MINUTES_MS
+function floorToStep(ms: number, step = TEN_MINUTES_MS): number {
+  return Math.floor(ms / step) * step
 }
 
 const iso = (ms: number): string => new Date(ms).toISOString()
@@ -305,10 +309,10 @@ function isSortedByTime(calls: LimitCall[]): boolean {
   return true
 }
 
-export function buildSessionWindows(readings: LimitReading[], events: LimitEvent[], calls: LimitCall[]): SessionWindow[] {
+export function buildSessionWindows(readings: LimitReading[], events: LimitEvent[], calls: LimitCall[], step = TEN_MINUTES_MS): SessionWindow[] {
   const keys = new Set<number>()
-  for (const r of readings) if (r.fiveHour) keys.add(windowKey(r.fiveHour.resetsAt))
-  for (const e of events) if (e.limit === 'five_hour') keys.add(windowKey(e.resetsAt))
+  for (const r of readings) if (r.fiveHour) keys.add(windowKey(r.fiveHour.resetsAt, step))
+  for (const e of events) if (e.limit === 'five_hour') keys.add(windowKey(e.resetsAt, step))
 
   const known: SessionWindow[] = [...keys].sort((a, b) => a - b)
     .map(key => ({ key, start: key - FIVE_HOURS_MS, end: key, inferred: false }))
@@ -331,7 +335,7 @@ export function buildSessionWindows(readings: LimitReading[], events: LimitEvent
     const last = windows[windows.length - 1]
     if (k < known.length && known[k]!.start <= call.at) continue
     if (last && last.inferred && call.at < last.end) continue
-    const start = Math.max(prevEnd, floorToTenMinutes(call.at))
+    const start = Math.max(prevEnd, floorToStep(call.at, step))
     let end = start + FIVE_HOURS_MS
     if (k < known.length && known[k]!.start < end) end = known[k]!.start
     windows.push({ key: end, start, end, inferred: true })
@@ -353,11 +357,11 @@ type WeekWindow = {
 /// A reading whose reset time moved, or whose percent dropped before the reset,
 /// ends the previous week at that reading. Weeks before the first reading are
 /// stepped back seven days at a time and flagged as inferred.
-export function buildWeekWindows(readings: LimitReading[], events: LimitEvent[], now: number, count = WEEK_LIST_COUNT): WeekWindow[] {
+export function buildWeekWindows(readings: LimitReading[], events: LimitEvent[], now: number, count = WEEK_LIST_COUNT, step = TEN_MINUTES_MS): WeekWindow[] {
   type Obs = { at: number; key: number; pct: number | null }
   const obs: Obs[] = []
-  for (const r of readings) if (r.sevenDay) obs.push({ at: r.at, key: windowKey(r.sevenDay.resetsAt), pct: r.sevenDay.pct })
-  for (const e of events) if (e.limit === 'seven_day') obs.push({ at: e.at, key: windowKey(e.resetsAt), pct: null })
+  for (const r of readings) if (r.sevenDay) obs.push({ at: r.at, key: windowKey(r.sevenDay.resetsAt, step), pct: r.sevenDay.pct })
+  for (const e of events) if (e.limit === 'seven_day') obs.push({ at: e.at, key: windowKey(e.resetsAt, step), pct: null })
   obs.sort((a, b) => a.at - b.at)
 
   const weeks: WeekWindow[] = []
@@ -616,6 +620,8 @@ type PeerContext = {
   slots: LimitSlot[]
   localName: string
   now: number
+  /// The mark windows are rounded to (see LimitsInput.windowStepMs).
+  step: number
 }
 
 export function computeClaudeLimits(input: LimitsInput): LimitsOutput {
@@ -623,7 +629,9 @@ export function computeClaudeLimits(input: LimitsInput): LimitsOutput {
   const peers = input.peers ?? []
   // A device on another Claude account spent against other limits.
   const counted = peers.filter(p => p.status !== 'other_account')
+  const step = input.windowStepMs ?? TEN_MINUTES_MS
   const ctx: PeerContext = {
+    step,
     peers,
     slots: counted.flatMap(p => p.slots.map(clampSlot).filter(slot => slot.costUSD > 0)),
     localName: input.localName ?? 'This device',
@@ -632,20 +640,20 @@ export function computeClaudeLimits(input: LimitsInput): LimitsOutput {
   const readings = [...input.readings].sort((a, b) => a.at - b.at)
   const calls = [...input.calls, ...counted.flatMap(peerCalls)].sort((a, b) => a.at - b.at)
   const prompts = [...(input.prompts ?? [])].sort((a, b) => a.at - b.at)
-  const events = firstEventPerWindow([...input.events, ...counted.flatMap(p => p.events)])
+  const events = firstEventPerWindow([...input.events, ...counted.flatMap(p => p.events)], step)
 
-  const sessionWindows = buildSessionWindows(readings, events, calls)
-  const weeks = buildWeekWindows(readings, events, now)
+  const sessionWindows = buildSessionWindows(readings, events, calls, step)
+  const weeks = buildWeekWindows(readings, events, now, WEEK_LIST_COUNT, step)
 
   const sevenDay: SevenDayObs[] = readings
     .filter(r => r.sevenDay)
-    .map(r => ({ at: r.at, pct: r.sevenDay!.pct, key: windowKey(r.sevenDay!.resetsAt) }))
+    .map(r => ({ at: r.at, pct: r.sevenDay!.pct, key: windowKey(r.sevenDay!.resetsAt, step) }))
   const callTimes = calls.map(c => c.at)
   const gaps = buildGaps(input.failures, readings)
   const readingsByFiveHourKey = new Map<number, LimitReading[]>()
   for (const r of readings) {
     if (!r.fiveHour) continue
-    const key = windowKey(r.fiveHour.resetsAt)
+    const key = windowKey(r.fiveHour.resetsAt, step)
     const list = readingsByFiveHourKey.get(key) ?? []
     list.push(r)
     readingsByFiveHourKey.set(key, list)
@@ -660,7 +668,7 @@ export function computeClaudeLimits(input: LimitsInput): LimitsOutput {
     if (out.usedPct === null || out.usedPct < 1) return null
     const cutoff = out.ranOutAt
       ? Date.parse(out.ranOutAt) + 1
-      : Math.max(...readings.filter(r => r.sevenDay && windowKey(r.sevenDay.resetsAt) === w.key && r.at >= w.start && r.at < w.end).map(r => r.at)) + 1
+      : Math.max(...readings.filter(r => r.sevenDay && windowKey(r.sevenDay.resetsAt, step) === w.key && r.at >= w.start && r.at < w.end).map(r => r.at)) + 1
     const spent = spendIn(calls, w.start, Math.min(cutoff, w.end)).spentUSD
     return spent > 0 ? out.usedPct / spent : null
   })
@@ -680,7 +688,7 @@ export function computeClaudeLimits(input: LimitsInput): LimitsOutput {
     const sessionReadings = window.inferred ? [] : readingsByFiveHourKey.get(window.key) ?? []
     if (spend.first === null && !running && sessionReadings.every(r => (r.fiveHour?.pct ?? 0) < 1)) continue
 
-    const ranOutEvent = window.inferred ? undefined : events.find(e => e.limit === 'five_hour' && windowKey(e.resetsAt) === window.key)
+    const ranOutEvent = window.inferred ? undefined : events.find(e => e.limit === 'five_hour' && windowKey(e.resetsAt, step) === window.key)
     const weekRanOut = events.find(e => e.limit === 'seven_day' && e.at >= window.start && e.at < window.end)
 
     // 5-hour use.
@@ -935,7 +943,7 @@ export function computeClaudeLimits(input: LimitsInput): LimitsOutput {
 
 /// A slot's call times kept inside the slot, whatever the device sent.
 function clampSlot(slot: LimitSlot): LimitSlot {
-  const start = floorToTenMinutes(slot.at)
+  const start = floorToStep(slot.at)
   const last = start + TEN_MINUTES_MS - 1
   const firstAt = Math.min(Math.max(slot.firstAt, start), last)
   const lastAt = Math.min(Math.max(slot.lastAt, firstAt), last)
@@ -1005,7 +1013,7 @@ function computeWeek(w: WeekWindow, readings: LimitReading[], events: LimitEvent
   const to = Math.min(w.end, now)
   const spend = spendIn(calls, w.start, to)
   const ranOut = events.find(e => e.limit === 'seven_day' && e.at >= w.start && e.at < w.end)
-  const inWeek = readings.filter(r => r.sevenDay && windowKey(r.sevenDay.resetsAt) === w.key && r.at >= w.start && r.at < w.end)
+  const inWeek = readings.filter(r => r.sevenDay && windowKey(r.sevenDay.resetsAt, ctx.step) === w.key && r.at >= w.start && r.at < w.end)
 
   let usedPct: number | null = null
   let usedQuality: Quality = 'unknown'
@@ -1083,7 +1091,7 @@ function previousAtSamePoint(
   const split = devices ? { devices } : {}
   const ranOut = events.find(e => e.limit === 'seven_day' && e.at >= previous.start && e.at <= at)
   if (ranOut) return { at: iso(at), spentUSD, usedPct: 100, usedQuality: 'exact', ...split }
-  const inWeek = readings.filter(r => r.sevenDay && windowKey(r.sevenDay.resetsAt) === previous.key && r.at >= previous.start && r.at <= at)
+  const inWeek = readings.filter(r => r.sevenDay && windowKey(r.sevenDay.resetsAt, ctx.step) === previous.key && r.at >= previous.start && r.at <= at)
   if (inWeek.length === 0) return { at: iso(at), spentUSD, usedPct: null, usedQuality: 'unknown', ...split }
   const last = inWeek[inWeek.length - 1]!
   const lastCall = prevBefore(callTimes, at + 1)
@@ -1097,10 +1105,10 @@ function previousAtSamePoint(
 }
 
 /// Later refusals in the same window are retries against a limit already hit.
-export function firstEventPerWindow(events: LimitEvent[]): LimitEvent[] {
+export function firstEventPerWindow(events: LimitEvent[], step = TEN_MINUTES_MS): LimitEvent[] {
   const first = new Map<string, LimitEvent>()
   for (const e of events) {
-    const key = `${e.limit}|${windowKey(e.resetsAt)}`
+    const key = `${e.limit}|${windowKey(e.resetsAt, step)}`
     const existing = first.get(key)
     if (!existing || e.at < existing.at) first.set(key, e)
   }

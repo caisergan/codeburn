@@ -975,3 +975,12 @@
 "agy is signed out. Run `agy` once and sign in." = "agy에서 로그아웃되었습니다. `agy`를 한 번 실행해 로그인하세요.";
 "agy lists no model in this group" = "agy에 이 그룹의 모델이 없습니다";
 "no output" = "출력 없음";
+
+/* Antigravity sessions */
+"No Antigravity sessions in the last seven days" = "지난 7일 동안 Antigravity 세션이 없습니다";
+"Antigravity was signed out" = "Antigravity가 로그아웃되어 있었습니다";
+"Antigravity reported no quota groups" = "Antigravity가 할당량 그룹을 보고하지 않았습니다";
+"Quota group" = "할당량 그룹";
+"Session numbers" = "세션 수치";
+"Keep Antigravity session numbers live while Antigravity is working" = "Antigravity가 작업하는 동안 세션 수치를 실시간으로 유지";
+"Checks your Antigravity quota every 2 minutes while the app, agy or the IDE is working and for 10 minutes after. Nothing runs while idle." = "앱, agy 또는 IDE가 작업하는 동안과 그 후 10분 동안 2분마다 Antigravity 할당량을 확인합니다. 유휴 상태에서는 아무것도 실행하지 않습니다.";

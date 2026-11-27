@@ -975,3 +975,12 @@
 "agy is signed out. Run `agy` once and sign in." = "agy からサインアウトしています。`agy` を一度実行してサインインしてください。";
 "agy lists no model in this group" = "agy にはこのグループのモデルがありません";
 "no output" = "出力なし";
+
+/* Antigravity sessions */
+"No Antigravity sessions in the last seven days" = "過去7日間にAntigravityセッションはありません";
+"Antigravity was signed out" = "Antigravityがサインアウトされていました";
+"Antigravity reported no quota groups" = "Antigravityがクォータグループを返しませんでした";
+"Quota group" = "クォータグループ";
+"Session numbers" = "セッションの数値";
+"Keep Antigravity session numbers live while Antigravity is working" = "Antigravityの作業中はセッションの数値を最新に保つ";
+"Checks your Antigravity quota every 2 minutes while the app, agy or the IDE is working and for 10 minutes after. Nothing runs while idle." = "アプリ、agy、IDEの作業中とその後10分間、2分ごとにAntigravityのクォータを確認します。待機中は何も実行しません。";

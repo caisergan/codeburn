@@ -185,8 +185,15 @@ enum ClaudeSessionFormat {
     }
 
     /// The reason a session's values are estimated, for its expanded row.
-    static func gapReason(_ reason: String) -> String {
-        switch reason {
+    static func gapReason(_ reason: String, provider: LimitsProvider = .claude) -> String {
+        if provider == .antigravity {
+            switch reason {
+            case "auth": return L("Antigravity was signed out")
+            case "no_windows": return L("Antigravity reported no quota groups")
+            default: return L("the network was unavailable")
+            }
+        }
+        return switch reason {
         case "rate_limited": L("Anthropic asked CodeBurn to slow down")
         case "auth": L("Claude needed to be reconnected")
         case "decode": L("Anthropic's answer could not be read")

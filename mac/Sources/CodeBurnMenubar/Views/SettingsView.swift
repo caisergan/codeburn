@@ -1699,10 +1699,19 @@ private struct CopilotConnectionRow: View {
 // MARK: - Antigravity
 
 private struct AntigravitySettingsTab: View {
+    @AppStorage(AntigravityLiveReadingPreference.defaultsKey)
+    private var liveWhileActive: Bool = true
+
     var body: some View {
         Form {
             Section(L("Connection")) {
                 AntigravityConnectionRow()
+            }
+            Section(L("Session numbers")) {
+                Toggle(L("Keep Antigravity session numbers live while Antigravity is working"), isOn: $liveWhileActive)
+                Text(L("Checks your Antigravity quota every 2 minutes while the app, agy or the IDE is working and for 10 minutes after. Nothing runs while idle."))
+                    .font(.system(size: 11))
+                    .foregroundStyle(.secondary)
             }
             AntigravityWarmSettingsSection()
             Section {

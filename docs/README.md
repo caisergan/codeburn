@@ -25,6 +25,7 @@ One line per file in this directory, recursively.
 
 - [design/capacity-dock.md](design/capacity-dock.md) — Status: implementation specification (Epic: Quota Intelligence #725).
 - [design/claude-session-usage.md](design/claude-session-usage.md) — Status: implemented (V1). Spend at API prices and limit use per Claude 5-hour session and per week, in the menu bar.
+- [design/antigravity-session-usage.md](design/antigravity-session-usage.md) — Status: implemented. The same sessions and weeks for Antigravity, per quota group.
 - [design/claude-window-warmer.md](design/claude-window-warmer.md) — Status: implemented (V1). Start a Claude 5-hour window at chosen times (or with a Warm button) by sending one minimal Claude Code message from a paired always-on device.
 - [design/codeburn-desktop-plan.md](design/codeburn-desktop-plan.md) — Goal: a standalone Electron desktop app that renders the approved v6 "indigo instrument" wireframes, fed entirely by spawning the `codeburn` CLI for JSON.
 - [design/codeburn-desktop.md](design/codeburn-desktop.md) — Build CodeBurn Desktop, a standalone, resizable native desktop application (Electron) that renders the approved v6 "indigo instrument" wireframes.

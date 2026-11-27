@@ -3376,14 +3376,32 @@ program
 
 program
   .command('limits')
-  .description('Claude 5-hour sessions and weeks: spend at API prices against limit use (reads the menubar\'s limit readings; no network calls without --devices)')
+  .description('Claude or Antigravity 5-hour sessions and weeks: spend at API prices against limit use (reads the menubar\'s limit readings; no network calls without --devices)')
   .option('--format <format>', 'Output format: table, json', 'table')
+  .option('--provider <provider>', 'Provider: claude, antigravity (one report per quota group)', 'claude')
   .option('--devices', 'First fetch the latest Claude spend from paired devices (network); otherwise their cached data is used')
   .option('--retry-failed', 'With --devices: also ask devices whose last attempt failed, without waiting out the retry backoff')
   .action(async (opts) => {
     assertFormat(opts.format, ['table', 'json'], 'limits')
+    if (opts.provider !== 'claude' && opts.provider !== 'antigravity') {
+      process.stderr.write(`codeburn limits: --provider must be claude or antigravity, not "${opts.provider}"\n`)
+      process.exitCode = 1
+      return
+    }
     const { buildLimitsReport, renderLimitsTable } = await import('./claude-limits-report.js')
     await loadPricing()
+    if (opts.provider === 'antigravity') {
+      const { buildAntigravityLimitsReport } = await import('./antigravity-limits.js')
+      const report = await buildAntigravityLimitsReport(new Date())
+      if (opts.format === 'json') {
+        process.stdout.write(JSON.stringify(report, null, 2) + '\n')
+        return
+      }
+      const parts: string[] = [`Antigravity${report.plan ? ` · ${report.plan}` : ''}`]
+      for (const group of report.groups) parts.push('', `== ${group.name} ==`, await renderLimitsTable(group.report))
+      process.stdout.write(parts.join('\n') + '\n')
+      return
+    }
     const report = await buildLimitsReport(new Date(), { devices: !!opts.devices, retryFailed: !!opts.retryFailed })
     if (opts.format === 'json') {
       process.stdout.write(JSON.stringify(report, null, 2) + '\n')
