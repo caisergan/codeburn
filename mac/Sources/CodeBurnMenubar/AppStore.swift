@@ -2209,11 +2209,13 @@ final class AppStore {
     private func applyAntigravityFetchError(_ err: AntigravitySubscriptionService.FetchError) {
         let sanitized = sanitizeForUI(err.errorDescription)
         antigravityError = sanitized
-        if case .disconnected = err {
-            // No local server answered — the routine "app not running" state,
-            // not an error; the UI shows the Connect affordance.
+        switch err {
+        case .disconnected, .signedOut:
+            // No local server and no usable sign-in: the UI asks the user to
+            // sign in to Antigravity once. While signed in, quota keeps
+            // coming from Google with the app closed.
             antigravityLoadState = .noCredentials
-        } else {
+        case .network, .remote:
             // Unexpected discovery/probe failures back off automatically,
             // mirroring the Electron provider's transientFailure mapping.
             antigravityLoadState = .transientFailure(retryAt: nil)

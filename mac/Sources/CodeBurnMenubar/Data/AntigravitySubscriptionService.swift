@@ -17,16 +17,61 @@ struct AntigravityUsage: Sendable, Equatable {
     /// Per-group/per-model windows, most-constrained first.
     let details: [Window]
     var primary: Window? { details.first }
-    /// Plan label from GetUserStatus (summary payloads carry none).
+    /// Plan label from GetUserStatus or loadCodeAssist (local summary
+    /// payloads carry none).
     let plan: String?
     let fetchedAt: Date
+    /// The summary payload's groups, with their raw 5-hour and weekly
+    /// buckets; the window warmer reads these. Empty for legacy payloads.
+    var groups: [Group] = []
+    var source: Source = .local
+
+    enum Source: Sendable, Equatable {
+        /// The running app's or CLI's language server on 127.0.0.1.
+        case local
+        /// Google's quota endpoint with the keychain sign-in, while nothing
+        /// runs locally (AntigravityRemoteQuota).
+        case remote
+    }
+
+    /// One quota group ("Gemini Models", "Claude and GPT models"): its models
+    /// share a 5-hour and a weekly limit.
+    struct Group: Sendable, Equatable {
+        struct Bucket: Sendable, Equatable {
+            let remainingFraction: Double
+            let resetsAt: Date?
+            var usedPercent: Double { min(100, max(0, (1 - remainingFraction) * 100)) }
+        }
+
+        /// The bucket id prefix: "gemini" for gemini-5h, "3p" for 3p-weekly.
+        let id: String
+        let name: String
+        /// Display names from the group description ("Models within this
+        /// group: A, B").
+        let models: [String]
+        let fiveHour: Bucket?
+        let weekly: Bucket?
+
+        /// An unused group reads full, with no reset time or one that keeps
+        /// sliding to now + 5 h; the window only starts on first use.
+        func isFiveHourIdle(now: Date) -> Bool {
+            guard let fiveHour else { return false }
+            guard fiveHour.remainingFraction >= 0.999 else { return false }
+            guard let resets = fiveHour.resetsAt else { return true }
+            return resets.timeIntervalSince(now) >= 5 * 3600 - 180
+        }
+
+        var isWeeklyFull: Bool { (weekly?.remainingFraction ?? 1) <= 0.001 }
+    }
 }
 
 /// Live Antigravity quota from LOCAL surfaces only — the Antigravity app's own
 /// language server or a signed-in `agy` CLI's embedded server, derived from
 /// observed Antigravity client traffic. This protocol is internal
-/// and experimental). No Google OAuth fallback: when no local server answers,
-/// the provider reports disconnected and the UI shows its Connect affordance.
+/// and experimental). When no local server answers, quota is read from
+/// Google with the keychain sign-in instead (AntigravityRemoteQuota), so it
+/// keeps working while Antigravity is closed; only with no sign-in at all
+/// does the provider report disconnected.
 ///
 /// Endpoints (loopback only, Connect-RPC JSON):
 /// - POST https://127.0.0.1:<port>/exa.language_server_pb.LanguageServerService/RetrieveUserQuotaSummary
@@ -51,13 +96,21 @@ enum AntigravitySubscriptionService {
         /// Unexpected discovery failure (e.g. `ps` blew up). Transient: the
         /// next cadence tick retries.
         case network(Error)
+        /// The keychain sign-in exists but Google no longer accepts it.
+        case signedOut
+        /// The remote quota read failed (HTTP or network). Transient.
+        case remote(String)
 
         var errorDescription: String? {
             switch self {
             case .disconnected:
-                return "No running Antigravity language server found. Start the Antigravity app, then click Reconnect."
+                return L("Antigravity isn't running and no Antigravity sign-in was found. Sign in to Antigravity once, then click Reconnect.")
             case let .network(err):
                 return "Local probe failed: \(err.localizedDescription)"
+            case .signedOut:
+                return L("Antigravity is signed out. Open Antigravity and sign in, then click Reconnect.")
+            case let .remote(message):
+                return L("Couldn't read Antigravity quota from Google: %@", message)
             }
         }
     }
@@ -74,6 +127,8 @@ enum AntigravitySubscriptionService {
         var now: @Sendable () -> Date
         /// Log sink for sanitized diagnostics; tests capture it.
         var log: @Sendable (String) -> Void
+        /// Read when no local server answers. Tests default to "no sign-in".
+        var remote: @Sendable () async throws -> AntigravityUsage = { throw AntigravityRemoteQuota.FetchError.noGrant }
 
         static let live = Deps(
             exec: { executable, arguments in
@@ -107,7 +162,8 @@ enum AntigravitySubscriptionService {
                 }
             },
             now: { Date() },
-            log: { NSLog("%@", $0) }
+            log: { NSLog("%@", $0) },
+            remote: { try await AntigravityRemoteQuota.fetch() }
         )
     }
 
@@ -250,6 +306,53 @@ enum AntigravitySubscriptionService {
         return windows
     }
 
+    /// The summary payload's groups for the warmer, keyed by bucket-id
+    /// prefix. A group without a recognizable 5h or weekly bucket keeps nil.
+    static func decodeGroups(_ body: Any?) -> [AntigravityUsage.Group] {
+        guard let root = body as? [String: Any] else { return [] }
+        let data = root["response"] as? [String: Any] ?? root
+        var groups: [AntigravityUsage.Group] = []
+        for raw in data["groups"] as? [Any] ?? [] {
+            guard let group = raw as? [String: Any] else { continue }
+            let name = group["displayName"] as? String ?? ""
+            var id: String?
+            var fiveHour: AntigravityUsage.Group.Bucket?
+            var weekly: AntigravityUsage.Group.Bucket?
+            for rawBucket in group["buckets"] as? [Any] ?? [] {
+                guard let bucket = rawBucket as? [String: Any] else { continue }
+                let bucketId = bucket["bucketId"] as? String ?? ""
+                let window = (bucket["window"] as? String)
+                    ?? bucketId.split(separator: "-").last.map(String.init) ?? ""
+                if id == nil, let dash = bucketId.lastIndex(of: "-") {
+                    id = String(bucketId[..<dash])
+                }
+                guard let remaining = number(bucket["remainingFraction"]
+                    ?? (bucket["remaining"] as? [String: Any])?["remainingFraction"]) else { continue }
+                let parsed = AntigravityUsage.Group.Bucket(remainingFraction: remaining, resetsAt: resetDate(bucket["resetTime"]))
+                switch window.lowercased() {
+                case "5h": fiveHour = parsed
+                case "weekly": weekly = parsed
+                default: break
+                }
+            }
+            let groupId = id ?? name.lowercased()
+            if groupId.isEmpty { continue }
+            groups.append(AntigravityUsage.Group(
+                id: groupId, name: name, models: modelNames(group["description"] as? String),
+                fiveHour: fiveHour, weekly: weekly))
+        }
+        return groups
+    }
+
+    /// "Models within this group: Claude Opus 5.5, GPT-OSS 120B" → names.
+    static func modelNames(_ description: String?) -> [String] {
+        guard let description, let colon = description.firstIndex(of: ":") else { return [] }
+        return description[description.index(after: colon)...]
+            .split(separator: ",")
+            .map { $0.trimmingCharacters(in: .whitespacesAndNewlines.union(CharacterSet(charactersIn: "."))) }
+            .filter { !$0.isEmpty }
+    }
+
     /// Legacy payload: flat per-model quota rows under GetUserStatus.
     static func decodeStatus(_ body: Any?) -> [AntigravityUsage.Window] {
         guard let data = body as? [String: Any],
@@ -356,12 +459,15 @@ enum AntigravitySubscriptionService {
         deps: Deps,
         port: Int,
         csrf: String?
-    ) async -> (windows: [AntigravityUsage.Window], plan: String?)? {
+    ) async -> (windows: [AntigravityUsage.Window], plan: String?, groups: [AntigravityUsage.Group])? {
         let body = "{}"
         for tls in [true, false] {
             var summaryWindows: [AntigravityUsage.Window] = []
+            var groups: [AntigravityUsage.Group] = []
             if let summary = await deps.request(port, tls, summaryPath, body, csrf), summary.status == 200 {
-                summaryWindows = decodeSummary(parseJson(summary.text))
+                let parsedSummary = parseJson(summary.text)
+                summaryWindows = decodeSummary(parsedSummary)
+                groups = decodeGroups(parsedSummary)
             }
             // The summary payload carries no tier, so GetUserStatus is asked either way.
             var parsed: Any?
@@ -369,15 +475,31 @@ enum AntigravitySubscriptionService {
                 parsed = parseJson(status.text)
             }
             let windows = summaryWindows.isEmpty ? decodeStatus(parsed) : summaryWindows
-            if !windows.isEmpty { return (windows, planFromStatus(parsed)) }
+            if !windows.isEmpty { return (windows, planFromStatus(parsed), groups) }
         }
         return nil
+    }
+
+    /// No local server answered: read quota from Google with the keychain
+    /// sign-in, so it keeps working while Antigravity is closed.
+    private static func remoteOrDisconnected(deps: Deps) async throws -> AntigravityUsage {
+        do {
+            return try await deps.remote()
+        } catch let error as AntigravityRemoteQuota.FetchError {
+            switch error {
+            case .noGrant: throw FetchError.disconnected
+            case .signedOut: throw FetchError.signedOut
+            case .clientNotFound: throw FetchError.disconnected
+            case let .http(code): throw FetchError.remote(L("Google answered HTTP %lld", code))
+            case let .network(message): throw FetchError.remote(message)
+            }
+        }
     }
 
     static func refresh(deps: Deps = .live) async throws -> AntigravityUsage {
         do {
             let candidates = try await discoverCandidates(deps: deps)
-            if candidates.isEmpty { throw FetchError.disconnected }
+            if candidates.isEmpty { return try await remoteOrDisconnected(deps: deps) }
             for candidate in candidates {
                 var ports = await listeningPorts(deps: deps, pid: candidate.pid)
                 if let extPort = candidate.extPort, !ports.contains(extPort) {
@@ -386,11 +508,11 @@ enum AntigravitySubscriptionService {
                 for port in ports {
                     if let found = await probePort(deps: deps, port: port, csrf: candidate.csrf) {
                         let windows = found.windows.sorted { $0.usedPercent > $1.usedPercent }
-                        return AntigravityUsage(details: windows, plan: found.plan, fetchedAt: deps.now())
+                        return AntigravityUsage(details: windows, plan: found.plan, fetchedAt: deps.now(), groups: found.groups)
                     }
                 }
             }
-            throw FetchError.disconnected
+            return try await remoteOrDisconnected(deps: deps)
         } catch let error as FetchError {
             throw error
         } catch {

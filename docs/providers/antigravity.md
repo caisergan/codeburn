@@ -34,6 +34,13 @@ statusLine commands that used stale absolute paths. Remove it with `codeburn
 antigravity-hook uninstall`; if `--force` replaced an existing statusLine
 command, uninstall restores that previous command.
 
+## Live quota (menu bar)
+
+The macOS menu bar reads Antigravity quota from the local language server while
+Antigravity runs, and from Google with the keychain sign-in while it is closed.
+It can also warm a quota group's 5-hour window through `agy`. See
+[docs/design/antigravity-quota-and-warmer.md](../design/antigravity-quota-and-warmer.md).
+
 ## Storage format
 
 Protobuf and SQLite.

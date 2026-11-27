@@ -154,7 +154,7 @@ struct ClaudeWarmSettingsSection: View {
             }
             .disabled(!prefs.enabled)
             ForEach(prefs.times, id: \.self) { time in
-                WarmTimeRow(time: time, warmer: warmer)
+                WarmTimeRow(time: time, prefs: prefs) { change in warmer.update(change) }
             }
             .disabled(!prefs.enabled)
             Button {
@@ -165,7 +165,7 @@ struct ClaudeWarmSettingsSection: View {
             .buttonStyle(.borderless)
             .disabled(!prefs.enabled || !prefs.canAddTime)
 
-            WarmDaysRow(warmer: warmer)
+            WarmDaysRow(days: prefs.days) { change in warmer.update(change) }
                 .disabled(!prefs.enabled)
             WarmDayPreview(prefs: prefs)
                 .opacity(prefs.enabled ? 1 : 0.45)
@@ -371,23 +371,25 @@ struct ClaudeWarmSettingsSection: View {
     }
 }
 
-private struct WarmTimeRow: View {
+/// One "Start a window at" row. Shared by the Claude and Antigravity warmers,
+/// so it edits whichever schedule `update` writes to.
+struct WarmTimeRow: View {
     let time: Int
-
-    var warmer: WindowWarmer = .shared
+    let prefs: WarmSchedulePrefs
+    let update: ((inout WarmSchedulePrefs) -> Void) -> Void
 
     var body: some View {
         HStack(spacing: 10) {
             DatePicker(L("Time"), selection: Binding(
                 get: { Self.date(for: time) },
-                set: { date in warmer.update { $0.moveTime(time, to: Self.minutes(of: date)) } }
+                set: { date in update { $0.moveTime(time, to: Self.minutes(of: date)) } }
             ), displayedComponents: .hourAndMinute)
             .labelsHidden()
             .fixedSize()
             Text(L("→ resets %@", WarmSchedulePrefs.clock(time + WarmSchedulePrefs.windowMinutes)))
                 .font(.system(size: 12).monospacedDigit())
                 .foregroundStyle(.secondary)
-            if let previous = warmer.prefs.overlappedTime(for: time) {
+            if let previous = prefs.overlappedTime(for: time) {
                 Text(L("inside the %@ window: only fires if that one wasn't started", WarmSchedulePrefs.clock(previous)))
                     .font(.system(size: 11))
                     .foregroundStyle(.orange)
@@ -398,7 +400,7 @@ private struct WarmTimeRow: View {
             }
             Spacer(minLength: 4)
             Button {
-                warmer.update { $0.removeTime(time) }
+                update { $0.removeTime(time) }
             } label: {
                 Image(systemName: "minus.circle.fill").foregroundStyle(.secondary)
             }
@@ -418,22 +420,22 @@ private struct WarmTimeRow: View {
     }
 }
 
-private struct WarmDaysRow: View {
-    var warmer: WindowWarmer = .shared
+struct WarmDaysRow: View {
+    let days: Set<Int>
+    let update: ((inout WarmSchedulePrefs) -> Void) -> Void
 
     private static let everyDay: Set<Int> = Set(0...6)
     private static let weekdays: Set<Int> = Set(0...4)
     private static let weekends: Set<Int> = [5, 6]
 
     var body: some View {
-        let days = warmer.prefs.days
         HStack(spacing: 6) {
             Text(L("Days"))
             Spacer()
             ForEach(0..<7, id: \.self) { index in
                 let on = days.contains(index)
                 Button {
-                    warmer.update { prefs in
+                    update { prefs in
                         if on { prefs.days.remove(index) } else { prefs.days.insert(index) }
                     }
                 } label: {
@@ -449,9 +451,9 @@ private struct WarmDaysRow: View {
                 .accessibilityValue(on ? L("On") : L("Off"))
             }
             Menu(presetLabel(days)) {
-                Button(L("Every day")) { warmer.update { $0.days = Self.everyDay } }
-                Button(L("Weekdays")) { warmer.update { $0.days = Self.weekdays } }
-                Button(L("Weekends")) { warmer.update { $0.days = Self.weekends } }
+                Button(L("Every day")) { update { $0.days = Self.everyDay } }
+                Button(L("Weekdays")) { update { $0.days = Self.weekdays } }
+                Button(L("Weekends")) { update { $0.days = Self.weekends } }
             }
             .menuStyle(.borderlessButton)
             .fixedSize()
@@ -479,7 +481,7 @@ private struct WarmDaysRow: View {
 
 /// The day at a glance: each scheduled window, overlaps striped, peak hours
 /// outlined, and the current time.
-private struct WarmDayPreview: View {
+struct WarmDayPreview: View {
     let prefs: WarmSchedulePrefs
 
     var body: some View {

@@ -1704,8 +1704,9 @@ private struct AntigravitySettingsTab: View {
             Section(L("Connection")) {
                 AntigravityConnectionRow()
             }
+            AntigravityWarmSettingsSection()
             Section {
-                Text(L("Antigravity live-quota tracking talks to the Antigravity app's local language server on 127.0.0.1 only. Nothing leaves the machine and no credential files are read. If it shows as disconnected, start the Antigravity app, then click Reconnect."))
+                Text(L("While Antigravity runs, quota comes from its local language server on 127.0.0.1. While it's closed, CodeBurn reads the sign-in Antigravity keeps in your login keychain and asks Google for the same quota the app shows. That sign-in is only read, never changed; an expired token is renewed in memory. If it shows as disconnected, sign in to Antigravity once, then click Reconnect."))
                     .font(.system(size: 11))
                     .foregroundStyle(.secondary)
             } header: {
@@ -1780,17 +1781,17 @@ private struct AntigravityConnectionRow: View {
             if let plan = store.antigravityUsage?.plan {
                 return L("Plan: %@", plan)
             }
-            return L("Live quota tracked from the local Antigravity server.")
+            return L("Live Antigravity quota tracked.")
         case .terminalFailure:
-            return L("Start the Antigravity app, then click Reconnect.")
+            return L("Sign in to Antigravity, then click Reconnect.")
         case .transientFailure: return store.antigravityError ?? L("Local probe failed; auto-retrying.")
-        case .bootstrapping: return L("Probing the local Antigravity language server.")
+        case .bootstrapping: return L("Loading Antigravity quota.")
         case .loading: return L("Background refresh in progress.")
-        case .dormant: return L("Tap Load Quota to probe the local Antigravity server.")
+        case .dormant: return L("Tap Load Quota to load Antigravity quota.")
         case .notBootstrapped:
-            return L("Start the Antigravity app first, then click Connect.")
+            return L("Sign in to Antigravity first, then click Connect.")
         case .noCredentials:
-            return L("No local Antigravity server found. Start the Antigravity app, then click Reconnect.")
+            return store.antigravityError ?? L("No Antigravity sign-in found. Sign in to the Antigravity app or agy once, then click Reconnect.")
         case .failed: return store.antigravityError ?? ""
         }
     }
@@ -1809,7 +1810,7 @@ private struct AntigravityConnectionRow: View {
                     }
                     Button(L("Cancel"), role: .cancel) {}
                 } message: {
-                    Text(L("CodeBurn will stop tracking Antigravity quota. Nothing is read from or written to disk. The Antigravity app keeps working."))
+                    Text(L("CodeBurn will stop tracking Antigravity quota. Nothing is written to disk or the keychain. The Antigravity app keeps working."))
                 }
         case .terminalFailure, .noCredentials, .failed:
             Button(L("Reconnect")) { Task { await store.bootstrapAntigravity() } }
