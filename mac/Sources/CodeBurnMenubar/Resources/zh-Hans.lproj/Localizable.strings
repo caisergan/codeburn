@@ -973,3 +973,12 @@
 "agy is signed out. Run `agy` once and sign in." = "agy 已退出登录。请运行一次 `agy` 并登录。";
 "agy lists no model in this group" = "agy 未列出该组中的模型";
 "no output" = "无输出";
+
+/* Antigravity sessions */
+"No Antigravity sessions in the last seven days" = "过去七天没有 Antigravity 会话";
+"Antigravity was signed out" = "Antigravity 已退出登录";
+"Antigravity reported no quota groups" = "Antigravity 未报告任何配额组";
+"Quota group" = "配额组";
+"Session numbers" = "会话数据";
+"Keep Antigravity session numbers live while Antigravity is working" = "Antigravity 工作时保持会话数据实时更新";
+"Checks your Antigravity quota every 2 minutes while the app, agy or the IDE is working and for 10 minutes after. Nothing runs while idle." = "应用、agy 或 IDE 工作期间及之后 10 分钟内，每 2 分钟检查一次 Antigravity 配额。空闲时不运行。";

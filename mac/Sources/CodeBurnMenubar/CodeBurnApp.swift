@@ -152,6 +152,7 @@ final class AppDelegate: NSObject, NSApplicationDelegate, NSPopoverDelegate, NSM
         // Claude session numbers: watch for transcript writes, carry the old
         // snapshot history into the reading log once, then load the report.
         ClaudeActivityMonitor.shared.start()
+        AntigravityActivity.monitor.start(paths: AntigravityActivity.watchedDirectories())
         Task { [store] in
             await ClaudeLimitReadingLog.shared.importSnapshotsIfNeeded()
             await store.refreshClaudeLimits(force: true)
@@ -434,7 +435,10 @@ final class AppDelegate: NSObject, NSApplicationDelegate, NSPopoverDelegate, NSM
         lastSuccessfulUsageDataSnapshotAt = Date()
         // New local calls move the Claude session spend too. Throttled inside,
         // so a burst of payload refreshes costs one limits query a minute.
-        Task { [store] in await store.refreshClaudeLimits() }
+        Task { [store] in
+            await store.refreshClaudeLimits()
+            await store.refreshAntigravityLimits()
+        }
     }
 
     private func shouldSkipBackgroundUsageRefresh() -> Bool {
@@ -868,7 +872,20 @@ final class AppDelegate: NSObject, NSApplicationDelegate, NSPopoverDelegate, NSM
         return result
     }
 
+    /// Reads Antigravity quota when someone looks at it (the popover opening,
+    /// the Antigravity tab appearing), at most once per 30 seconds. The
+    /// background tick only reads it once per quota cadence, minutes apart,
+    /// so without this the Plan tab showed a reading from launch.
+    @MainActor
+    func refreshAntigravityForViewingIfDue(now: Date = Date()) {
+        guard store.antigravityUsage != nil, store.antigravityLoadState != .notBootstrapped else { return }
+        guard now.timeIntervalSince(lastAntigravityRefreshAt ?? .distantPast) >= interactiveQuotaRefreshFloorSeconds else { return }
+        lastAntigravityRefreshAt = now
+        Task { [store] in _ = await store.refreshAntigravityReportingSuccess() }
+    }
+
     private func refreshLiveQuotaProgressForPopoverOpen() {
+        refreshAntigravityForViewingIfDue()
         let now = Date()
         let claudeElapsed = now.timeIntervalSince(lastSubscriptionRefreshAt ?? .distantPast)
         let codexElapsed = now.timeIntervalSince(lastCodexRefreshAt ?? .distantPast)
@@ -970,9 +987,30 @@ final class AppDelegate: NSObject, NSApplicationDelegate, NSPopoverDelegate, NSM
         }
     }
 
+    /// Antigravity's counterpart: its quota every 2 minutes (5 in Low Power
+    /// Mode) while the app, `agy` or the IDE wrote a conversation in the last
+    /// 10 minutes, whatever the usage refresh cadence. Each read is logged,
+    /// and refreshes the session numbers.
+    private func runAntigravityLiveReadingIfDue(now: Date = Date()) {
+        AntigravityActivity.monitor.start(paths: AntigravityActivity.watchedDirectories())
+        guard store.antigravityUsage != nil, store.antigravityLoadState != .notBootstrapped else { return }
+        guard QuotaRefreshDecision.claudeLiveReadingDue(
+            enabled: AntigravityLiveReadingPreference.isEnabled(),
+            connected: true,
+            lastClaudeWriteAt: AntigravityActivity.monitor.lastWriteAt,
+            lastAttemptAt: lastAntigravityRefreshAt,
+            backoffUntil: nil,
+            lowPowerMode: ProcessInfo.processInfo.isLowPowerModeEnabled,
+            now: now
+        ) else { return }
+        lastAntigravityRefreshAt = now
+        Task { [store] in _ = await store.refreshAntigravityReportingSuccess() }
+    }
+
     private func runRefreshLoopTick(reason: String, forcePayload: Bool = false, forceQuota: Bool = false) {
         refreshLoopHeartbeatAt = Date()
         runClaudeLiveReadingIfDue()
+        runAntigravityLiveReadingIfDue()
         // Display sleep without system sleep (clamshell displays off, screen
         // saver energy settings) otherwise keeps the full spawn cadence running
         // for hours (#647). Asked live rather than latched from
@@ -1791,7 +1829,10 @@ final class AppDelegate: NSObject, NSApplicationDelegate, NSPopoverDelegate, NSM
             }
             refreshPayloadForPopoverOpen()
             refreshLiveQuotaProgressForPopoverOpen()
-            Task { [store] in await store.refreshClaudeLimits(minAge: 30) }
+            Task { [store] in
+                await store.refreshClaudeLimits(minAge: 30)
+                await store.refreshAntigravityLimits(minAge: 30)
+            }
         }
     }
 

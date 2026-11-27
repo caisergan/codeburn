@@ -29,7 +29,7 @@ private func money(_ usd: Double, unpriced: Bool = false, cents: Bool = false) -
 
 /// Upper case in CodeBurn's display language, not the Mac's region: a
 /// Turkish-region Mac would otherwise print "API PRİCES".
-private func caps(_ text: String) -> String {
+func caps(_ text: String) -> String {
     text.uppercased(with: L10n.activeLocale)
 }
 
@@ -739,6 +739,7 @@ enum ClaudeSessionDetailTab: String, CaseIterable, Hashable, Sendable {
 /// a divider at each weekly reset.
 struct ClaudeSessionsList: View {
     let report: ClaudeLimitsReport
+    @Environment(\.limitsProvider) private var provider
     @State private var expanded: String?
     @State private var showAll = false
     /// A session pointed at on the strip or in the list; the other lights up.
@@ -796,7 +797,7 @@ struct ClaudeSessionsList: View {
             .padding(.top, 8)
 
             if sessions.isEmpty {
-                Text(L("No Claude sessions in the last seven days"))
+                Text(provider == .antigravity ? L("No Antigravity sessions in the last seven days") : L("No Claude sessions in the last seven days"))
                     .font(.system(size: 10.5))
                     .foregroundStyle(.tertiary)
                     .padding(.vertical, 4)
@@ -1206,6 +1207,7 @@ private struct ClaudeSessionRow: View {
 private struct ClaudeSessionDetail: View {
     let session: ClaudeLimitsReport.Session
     @Binding var tab: ClaudeSessionDetailTab
+    @Environment(\.limitsProvider) private var provider
 
     private static let chatRows = 3
     private static let modelRows = 4
@@ -1404,7 +1406,7 @@ private struct ClaudeSessionDetail: View {
                 "No limit readings %1$@–%2$@ · %3$@",
                 ClaudeSessionFormat.clock(gap.from),
                 ClaudeSessionFormat.clock(gap.to),
-                ClaudeSessionFormat.gapReason(gap.reason)
+                ClaudeSessionFormat.gapReason(gap.reason, provider: provider)
             ))
         }
         if !session.unpricedModels.isEmpty {
@@ -1505,6 +1507,7 @@ private struct ClaudeChatRow: View {
     /// A prompt shown in full instead of two lines.
     @State private var fullPrompt: ClaudeLimitsReport.Prompt?
     @State private var copied = false
+    @Environment(\.limitsProvider) private var provider
 
     private static let promptRows = 3
 
@@ -1638,9 +1641,10 @@ private struct ClaudeChatRow: View {
     }
 
     /// `cd '/path' && claude --resume <id>`: Claude Code finds a chat by the
-    /// folder it ran in.
+    /// folder it ran in. `agy --resume <id>` for Antigravity, whose chats
+    /// carry no folder.
     private var resumeCommand: String {
-        let resume = "claude --resume \(chat.sessionId)"
+        let resume = provider == .antigravity ? "agy --resume \(chat.sessionId)" : "claude --resume \(chat.sessionId)"
         guard let path = chat.path else { return resume }
         return "cd '\(path.replacingOccurrences(of: "'", with: "'\\''"))' && \(resume)"
     }
@@ -2207,5 +2211,24 @@ struct ClaudeSessionAllTabRow: View {
         .buttonStyle(.plain)
         .accessibilityLabel(L("Claude session: %@", ClaudeSessionFormat.allTabValue(report, symbol: CurrencyState.shared.symbol, rate: CurrencyState.shared.rate)))
         .accessibilityHint(L("Opens the Claude plan"))
+    }
+}
+
+// MARK: - Provider
+
+/// Whose sessions the views show: the few strings and commands that name the
+/// provider follow it. Claude unless an Antigravity section sets it.
+enum LimitsProvider: Sendable, Equatable {
+    case claude, antigravity
+}
+
+private struct LimitsProviderKey: EnvironmentKey {
+    static let defaultValue: LimitsProvider = .claude
+}
+
+extension EnvironmentValues {
+    var limitsProvider: LimitsProvider {
+        get { self[LimitsProviderKey.self] }
+        set { self[LimitsProviderKey.self] = newValue }
     }
 }

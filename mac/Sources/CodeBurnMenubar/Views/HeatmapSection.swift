@@ -2032,7 +2032,6 @@ private struct PlanInsight: View {
 
     private static let fiveHourSeconds: TimeInterval = 5 * 3600
     private static let sevenDaySeconds: TimeInterval = 7 * 86400
-    private static let freshWindowThreshold: Double = 0.05
 
     @State private var projections: [String: WindowProjection] = [:]
 
@@ -2186,21 +2185,8 @@ private struct PlanInsight: View {
     /// the prior cycle's final percent from the snapshot store.
     private func project(key: String, percent: Double?, resetsAt: Date?, windowSeconds: TimeInterval) async -> WindowProjection? {
         guard let percent, let resetsAt else { return nil }
-        let windowStart = resetsAt.addingTimeInterval(-windowSeconds)
-        let elapsed = Date().timeIntervalSince(windowStart)
-        let elapsedFraction = elapsed / windowSeconds
-
-        if elapsedFraction > Self.freshWindowThreshold, percent > 0 {
-            let projectedPercent = percent / elapsedFraction
-            var hitDate: Date? = nil
-            if projectedPercent > 100, percent < 100 {
-                let remainingPercent = 100 - percent
-                let percentPerSecond = percent / elapsed
-                if percentPerSecond > 0 {
-                    hitDate = Date().addingTimeInterval(remainingPercent / percentPerSecond)
-                }
-            }
-            return WindowProjection(percent: projectedPercent, willOverflow: projectedPercent > 100, hitsLimitAt: hitDate, source: .linear)
+        if let linear = linearWindowProjection(percent: percent, resetsAt: resetsAt, windowSeconds: windowSeconds) {
+            return linear
         }
 
         // Window too fresh OR percent exactly zero -- use the prior cycle's final reading.
@@ -2880,16 +2866,24 @@ private struct AntigravityPlanInsight: View {
         }
     }
 
+    private static let fiveHourSeconds: TimeInterval = 5 * 3600
+    private static let sevenDaySeconds: TimeInterval = 7 * 86400
+
+    @State private var projections: [String: WindowProjection] = [:]
+
+    /// Laid out like Claude › Plan: the plan name, Warm and the next reset,
+    /// then per quota group a 5-hour and a 7-day bar with its on-pace marker
+    /// and spend line, then the Sessions | Weeks section.
     @ViewBuilder
     private func loadedBody(usage: AntigravityUsage, idle: Bool) -> some View {
         VStack(alignment: .leading, spacing: 10) {
-            HStack(alignment: .firstTextBaseline) {
+            HStack(alignment: .firstTextBaseline, spacing: 8) {
                 Text(usage.plan ?? L("Antigravity"))
                     .font(.system(size: 13, weight: .semibold))
-                    .foregroundStyle(.primary)
+                    .foregroundStyle(Theme.brandAccent)
                 Spacer()
                 AntigravityWarmButton(usage: usage)
-                if let resetsAt = usage.primary?.resetsAt {
+                if let resetsAt = Self.headlineReset(usage: usage) {
                     Text(L("Resets %@", relativeReset(resetsAt)))
                         .font(.system(size: 10.5))
                         .foregroundStyle(.secondary)
@@ -2901,13 +2895,28 @@ private struct AntigravityPlanInsight: View {
                 }
             }
             AntigravityWarmBannerRow()
-            ForEach(Array(usage.details.enumerated()), id: \.offset) { _, window in
-                UtilizationRow(
-                    label: window.label,
-                    percent: window.usedPercent,
-                    resetsAt: window.resetsAt,
-                    projection: nil
-                )
+            if usage.groups.isEmpty {
+                // Legacy per-model payload: no 5-hour / weekly split to lay
+                // out, so each model keeps its own row.
+                VStack(spacing: 8) {
+                    ForEach(Array(usage.details.enumerated()), id: \.offset) { _, window in
+                        VStack(spacing: 3) {
+                            UtilizationRow(
+                                label: window.label,
+                                percent: window.usedPercent,
+                                resetsAt: window.resetsAt,
+                                projection: nil
+                            )
+                            spendLine(for: window)
+                        }
+                    }
+                }
+            } else {
+                VStack(alignment: .leading, spacing: 12) {
+                    ForEach(usage.groups, id: \.id) { group in
+                        groupBars(group, showName: usage.groups.count > 1)
+                    }
+                }
             }
             if idle {
                 Text(L("Antigravity sign-in unavailable. Sign in to Antigravity to refresh."))
@@ -2919,10 +2928,95 @@ private struct AntigravityPlanInsight: View {
                     .font(.system(size: 10))
                     .foregroundStyle(.tertiary)
             }
+            if let report = store.antigravityLimits {
+                AntigravitySessionsPlanSection(report: report, weekPaces: weekPaces)
+                    .padding(.top, 2)
+            }
         }
-        .padding(.horizontal, 14)
-        .padding(.top, 4)
-        .padding(.bottom, 8)
+        .task {
+            // Opening this tab is a look at the quota: read it now (at most
+            // every 30 s) rather than on the next quota-cadence tick.
+            if let delegate = NSApp.delegate as? AppDelegate {
+                delegate.refreshAntigravityForViewingIfDue()
+            } else {
+                await store.refreshAntigravity()
+            }
+        }
+        .task(id: usage.fetchedAt) {
+            projections = Self.projections(usage: usage)
+            await store.refreshAntigravityLimits(minAge: 30)
+        }
+    }
+
+    /// One quota group: its name when there are several, the 5-hour bar (or
+    /// "no session running" once the session numbers have loaded) and the
+    /// 7-day bar, each with its spend line.
+    @ViewBuilder
+    private func groupBars(_ group: AntigravityUsage.Group, showName: Bool) -> some View {
+        let report = store.antigravityLimits?.groups.first { $0.id == group.id }?.report
+        VStack(alignment: .leading, spacing: 8) {
+            if showName {
+                Text(caps(group.name))
+                    .font(.system(size: 9.5, weight: .semibold))
+                    .foregroundStyle(.tertiary)
+            }
+            if let fiveHour = group.fiveHour {
+                if group.isFiveHourIdle(now: Date()), report != nil {
+                    VStack(spacing: 3) { ClaudeNoSessionRow() }
+                } else {
+                    VStack(spacing: 3) {
+                        UtilizationRow(label: L("5-hour window"), percent: fiveHour.usedPercent, resetsAt: fiveHour.resetsAt, projection: projections["\(group.id)_five_hour"])
+                        if let session = report?.current.session {
+                            ClaudeSessionSpendLine(session: session)
+                        }
+                    }
+                }
+            }
+            if let weekly = group.weekly {
+                VStack(spacing: 3) {
+                    UtilizationRow(label: L("7-day total"), percent: weekly.usedPercent, resetsAt: weekly.resetsAt, projection: projections["\(group.id)_weekly"])
+                    if let week = report?.current.week {
+                        ClaudeWeekSpendLine(week: week)
+                    }
+                }
+            }
+        }
+    }
+
+    /// Each group's 7-day on-pace percent, for its Weeks list.
+    private var weekPaces: [String: Double] {
+        var paces: [String: Double] = [:]
+        for (key, projection) in projections where key.hasSuffix("_weekly") {
+            paces[String(key.dropLast("_weekly".count))] = projection.percent
+        }
+        return paces
+    }
+
+    private static func projections(usage: AntigravityUsage, now: Date = Date()) -> [String: WindowProjection] {
+        var result: [String: WindowProjection] = [:]
+        for group in usage.groups {
+            if let bucket = group.fiveHour, let resetsAt = bucket.resetsAt, !group.isFiveHourIdle(now: now),
+               let projection = linearWindowProjection(percent: bucket.usedPercent, resetsAt: resetsAt, windowSeconds: fiveHourSeconds, now: now) {
+                result["\(group.id)_five_hour"] = projection
+            }
+            if let bucket = group.weekly, let resetsAt = bucket.resetsAt,
+               let projection = linearWindowProjection(percent: bucket.usedPercent, resetsAt: resetsAt, windowSeconds: sevenDaySeconds, now: now) {
+                result["\(group.id)_weekly"] = projection
+            }
+        }
+        return result
+    }
+
+    /// The soonest reset among the windows that are running, as Claude's
+    /// header shows. An idle 5-hour bucket's reset only slides with the clock.
+    private static func headlineReset(usage: AntigravityUsage, now: Date = Date()) -> Date? {
+        guard !usage.groups.isEmpty else { return usage.primary?.resetsAt }
+        var candidates: [Date] = []
+        for group in usage.groups {
+            if !group.isFiveHourIdle(now: now), let resets = group.fiveHour?.resetsAt { candidates.append(resets) }
+            if let resets = group.weekly?.resetsAt { candidates.append(resets) }
+        }
+        return candidates.filter { $0 > now }.min() ?? usage.primary?.resetsAt
     }
 
     private func shortTime(_ date: Date) -> String {
@@ -2931,6 +3025,39 @@ private struct AntigravityPlanInsight: View {
         f.dateStyle = .none
         return f.string(from: date)
     }
+
+    /// "$4 so far · … of your week" under a group's 5-hour bar, and "$9 so
+    /// far · full week ≈ $60" under its weekly one, as Claude's bars have.
+    /// A window is "<group> · <bucket>"; the bucket says which limit it is.
+    @ViewBuilder
+    private func spendLine(for window: AntigravityUsage.Window) -> some View {
+        if let report = store.antigravityLimits,
+           let group = report.groups.first(where: { window.label.hasPrefix($0.name + " · ") }) {
+            let bucket = window.label.dropFirst(group.name.count + 3).lowercased()
+            if bucket.contains("five hour") || bucket.contains("5h") || bucket.contains("5-hour") {
+                if let session = group.report.current.session { ClaudeSessionSpendLine(session: session) }
+            } else if bucket.contains("week") {
+                if let week = group.report.current.week { ClaudeWeekSpendLine(week: week) }
+            }
+        }
+    }
+}
+
+/// Where a window ends up at its reset if use keeps its pace so far. Nil in
+/// the first 5% of the window or at 0%, where the pace says nothing yet.
+private func linearWindowProjection(percent: Double, resetsAt: Date, windowSeconds: TimeInterval, now: Date = Date()) -> WindowProjection? {
+    let elapsed = now.timeIntervalSince(resetsAt.addingTimeInterval(-windowSeconds))
+    let elapsedFraction = elapsed / windowSeconds
+    guard elapsedFraction > 0.05, percent > 0 else { return nil }
+    let projectedPercent = percent / elapsedFraction
+    var hitDate: Date? = nil
+    if projectedPercent > 100, percent < 100 {
+        let percentPerSecond = percent / elapsed
+        if percentPerSecond > 0 {
+            hitDate = now.addingTimeInterval((100 - percent) / percentPerSecond)
+        }
+    }
+    return WindowProjection(percent: projectedPercent, willOverflow: projectedPercent > 100, hitsLimitAt: hitDate, source: .linear)
 }
 
 private struct WindowProjection {

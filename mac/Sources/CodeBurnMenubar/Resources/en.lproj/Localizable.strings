@@ -982,3 +982,12 @@
 "agy is signed out. Run `agy` once and sign in." = "agy is signed out. Run `agy` once and sign in.";
 "agy lists no model in this group" = "agy lists no model in this group";
 "no output" = "no output";
+
+/* Antigravity sessions */
+"No Antigravity sessions in the last seven days" = "No Antigravity sessions in the last seven days";
+"Antigravity was signed out" = "Antigravity was signed out";
+"Antigravity reported no quota groups" = "Antigravity reported no quota groups";
+"Quota group" = "Quota group";
+"Session numbers" = "Session numbers";
+"Keep Antigravity session numbers live while Antigravity is working" = "Keep Antigravity session numbers live while Antigravity is working";
+"Checks your Antigravity quota every 2 minutes while the app, agy or the IDE is working and for 10 minutes after. Nothing runs while idle." = "Checks your Antigravity quota every 2 minutes while the app, agy or the IDE is working and for 10 minutes after. Nothing runs while idle.";

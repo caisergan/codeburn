@@ -51,6 +51,13 @@ actor ClaudeLimitReadingLog {
         pruneIfDue(now: now)
     }
 
+    /// One prepared success line, for a log of another provider's readings
+    /// (`AntigravityLimitReadingLog`).
+    func recordLine(_ line: [String: Any], at now: Date = Date()) {
+        append([line])
+        pruneIfDue(now: now)
+    }
+
     func recordFailure(_ reason: FailureReason, retryAfter: Int?, at now: Date = Date()) {
         append([Self.failureLine(reason, retryAfter: retryAfter, at: now)])
     }

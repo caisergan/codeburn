@@ -40,6 +40,10 @@ The macOS menu bar reads Antigravity quota from the local language server while
 Antigravity runs, and from Google with the keychain sign-in while it is closed.
 It can also warm a quota group's 5-hour window through `agy`. See
 [docs/design/antigravity-quota-and-warmer.md](../design/antigravity-quota-and-warmer.md).
+Every quota read is logged, and `codeburn limits --provider antigravity` turns
+the log and the priced calls into 5-hour sessions and weeks per quota group,
+shown in Antigravity › Plan. See
+[docs/design/antigravity-session-usage.md](../design/antigravity-session-usage.md).
 
 ## Storage format
 
